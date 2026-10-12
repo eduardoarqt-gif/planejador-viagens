@@ -1,0 +1,12 @@
+{
+  "name": "Planejador de Viagens",
+  "short_name": "Viagens",
+  "description": "Planejamento de roteiros, cenários e custos de viagens.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f1e7",
+  "theme_color": "#f6f1e7",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
