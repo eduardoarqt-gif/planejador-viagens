@@ -4,8 +4,8 @@
   "description": "Planejamento de roteiros, cenários e custos de viagens.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#f6f1e7",
-  "theme_color": "#f6f1e7",
+  "background_color": "#EFEEEA",
+  "theme_color": "#EFEEEA",
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

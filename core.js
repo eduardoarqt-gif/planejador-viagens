@@ -12,14 +12,25 @@ export function parseMoneyExpression(expression) {
   return Math.round((result + Number.EPSILON) * 100) / 100;
 }
 
+/** Total da despesa em reais, já com gorjeta. */
+export const expenseTotal = e => (e.amount || 0) * (1 + (e.tipPct || 0) / 100);
+
 export function calculateBalances(expenses, travelers) {
   const balances = Object.fromEntries(travelers.map(name => [name, 0]));
-  for (const expense of expenses) {
-    const people = expense.participants.filter(name => name in balances);
-    if (!people.length || !(expense.paidBy in balances)) continue;
-    const share = expense.amount / people.length;
-    balances[expense.paidBy] += expense.amount;
-    for (const name of people) balances[name] -= share;
+  for (const e of expenses) {
+    if (!(e.paidBy in balances)) continue;
+    const total = expenseTotal(e);
+    const shares = e.shares ? Object.entries(e.shares).filter(([name, v]) => name in balances && v > 0) : [];
+    if (shares.length) {
+      const sum = shares.reduce((s, [, v]) => s + v, 0);
+      balances[e.paidBy] += total;
+      for (const [name, v] of shares) balances[name] -= (v / sum) * total;
+      continue;
+    }
+    const people = (e.participants || []).filter(name => name in balances);
+    if (!people.length) continue;
+    balances[e.paidBy] += total;
+    for (const name of people) balances[name] -= total / people.length;
   }
   return balances;
 }

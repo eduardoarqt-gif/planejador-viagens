@@ -1,256 +1,141 @@
-import { parseMoneyExpression, calculateBalances, settle } from "./core.js";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js";
+import { geocodeCity, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js";
+import { ask, toast, brl, esc, plural, num } from "./ui.js";
 
-const STORAGE_KEY = "planejador-viagens-v4";
-const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
-const CAT_ICON = { Passagens: "✈", Hospedagem: "🛏", Transporte: "🚗", Alimentação: "🍽", Passeios: "🎟", Seguro: "🛡", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
+const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
+const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
 const COST_STATUS = ["Estimado", "Reservado", "Pago"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
-const TRIP_STATUS = { rascunho: "Rascunho", planejada: "Planejada", andamento: "Em andamento", concluida: "Concluída" };
+const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
+const TRIP_STATUS = { desejo: "Lista de desejos", rascunho: "Rascunho", planejada: "Planejada", andamento: "Em andamento", concluida: "Concluída" };
+const statusKey = label => Object.entries(TRIP_STATUS).find(([, l]) => l === label)?.[0];
 
-const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-const brl = value => money.format(value || 0);
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
-const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const ui = { tab: "cenarios", scenarioId: null, home: "viagens", tripId: null, hojeDay: null, mapCity: "", mapDay: "" };
 
-/* ---------- estado ---------- */
-let state = load();
-const ui = { tab: "cenarios", scenarioId: null };
-
-function load() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved?.trips) { saved.deleted ||= {}; return saved; }
-  } catch { /* começa vazio */ }
-  return { trips: [], deleted: {} };
-}
-const tripHash = t => JSON.stringify({ ...t, updatedAt: 0 });
-const hashes = {};
-const rememberHashes = () => state.trips.forEach(t => { hashes[t.id] = tripHash(t); });
-rememberHashes();
-function stamp() {
-  for (const t of state.trips) {
-    const h = tripHash(t);
-    if (hashes[t.id] !== h) { t.updatedAt = Date.now(); hashes[t.id] = h; }
-  }
-}
-function save() {
-  stamp();
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { toast("Não consegui salvar neste navegador."); }
-  dirty = true;
-  schedulePush();
-}
-
-/* ---------- sincronização (repositório privado no GitHub) ---------- */
-const SYNC_KEY = "planejador-sync";
-const REPO = "eduardoarqt-gif/viagens-dados";
-const FILE = "data.json";
-let dirty = false, syncStatus = "off", pushTimer = null, running = false;
-const syncToken = () => { try { return JSON.parse(localStorage.getItem(SYNC_KEY))?.token || ""; } catch { return ""; } };
-const STATUS_TEXT = { off: "Sem sincronização", syncing: "Sincronizando…", ok: "Sincronizado", error: "Erro ao sincronizar", offline: "Offline" };
-function setStatus(value) {
-  syncStatus = value;
-  document.querySelectorAll("[data-sync]").forEach(el => { el.textContent = STATUS_TEXT[value]; el.dataset.state = value; });
-}
-const b64decode = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, "")), c => c.charCodeAt(0)));
-const b64encode = text => {
-  let bin = "";
-  new TextEncoder().encode(text).forEach(b => { bin += String.fromCharCode(b); });
-  return btoa(bin);
-};
-function gh(method, body) {
-  return fetch(`https://api.github.com/repos/${REPO}/contents/${FILE}${method === "GET" ? `?t=${Date.now()}` : ""}`, {
-    method, cache: "no-store",
-    headers: { Authorization: `Bearer ${syncToken()}`, Accept: "application/vnd.github+json" },
-    body: body ? JSON.stringify(body) : undefined
-  });
-}
-function merge(local, remote) {
-  const deleted = { ...(remote.deleted || {}) };
-  for (const [id, ts] of Object.entries(local.deleted || {})) deleted[id] = Math.max(deleted[id] || 0, ts);
-  const byId = new Map();
-  for (const t of [...(remote.trips || []), ...local.trips]) {
-    const cur = byId.get(t.id);
-    if (!cur || (t.updatedAt || 0) >= (cur.updatedAt || 0)) byId.set(t.id, t);
-  }
-  const trips = [...byId.values()].filter(t => (deleted[t.id] || 0) < (t.updatedAt || 0));
-  return { trips, deleted };
-}
-const signature = trips => JSON.stringify((trips || []).map(t => [t.id, t.updatedAt || 0]).sort());
-async function sync(attempt = 0) {
-  if (!syncToken()) { setStatus("off"); return; }
-  if (running) return;
-  running = true;
-  setStatus("syncing");
-  try {
-    const res = await gh("GET");
-    let remote = { trips: [], deleted: {} }, sha;
-    if (res.status === 200) {
-      const json = await res.json();
-      sha = json.sha;
-      try { remote = JSON.parse(b64decode(json.content)); } catch { /* arquivo vazio */ }
-    } else if (res.status !== 404) throw new Error(`GET ${res.status}`);
-    const merged = merge(state, remote);
-    const changedLocal = signature(merged.trips) !== signature(state.trips);
-    if (dirty || res.status === 404 || signature(merged.trips) !== signature(remote.trips)) {
-      const put = await gh("PUT", { message: "sync", content: b64encode(JSON.stringify(merged)), sha });
-      if (put.status === 409 || put.status === 422) {
-        running = false;
-        if (attempt < 2) return sync(attempt + 1);
-        throw new Error("conflito");
-      }
-      if (!put.ok) throw new Error(`PUT ${put.status}`);
-    }
-    dirty = false;
-    if (changedLocal) {
-      state = merged;
-      rememberHashes();
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignora */ }
-      if (!sheet.open) render(true);
-    }
-    setStatus("ok");
-  } catch {
-    setStatus(navigator.onLine ? "error" : "offline");
-  } finally { running = false; }
-}
-function schedulePush() {
-  if (!syncToken()) return;
-  clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => sync(), 1200);
-}
-function commit() { save(); render(); }
-
-function newTrip({ name, days, travelers, start }) {
-  const scenario = { id: uid(), name: "Cenário 1", segments: [{ id: uid(), city: "Destino", days }], costs: [] };
-  return {
-    id: uid(), name, days, start: start || "", travelers, status: "rascunho",
-    scenarios: [scenario], chosenId: scenario.id,
-    expenses: [], itinerary: {}, bookings: []
-  };
-}
-
-/* ---------- cálculos ---------- */
+/* ---------- consultas ---------- */
 const route = () => location.hash.replace(/^#\/?/, "").split("/");
 const currentTrip = () => { const r = route(); return r[0] === "t" ? state.trips.find(t => t.id === r[1]) : null; };
-const activeScenario = trip => trip.scenarios.find(s => s.id === ui.scenarioId) || trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
+const currentDest = () => { const r = route(); return r[0] === "d" ? state.destinations.find(d => d.id === r[1]) : null; };
+const chosenScenario = trip => trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
+const activeScenario = trip => trip.scenarios.find(s => s.id === ui.scenarioId) || chosenScenario(trip);
+const dayISO = (trip, i) => addDays(trip.start, i);
+const fmtDay = iso => new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "short" }).replace(".", "");
+const fmtShort = iso => new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR");
+const fmtMonthYear = iso => new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR", { month: "short", year: "numeric" }).replace(".", "");
 
-function costTotal(cost, trip) {
-  const unit = cost.perPerson ? trip.travelers.length : 1;
-  return cost.amount * (cost.rate || 1) * unit;
+function activeDayIndex(trip) {
+  if (!trip.start || !["planejada", "andamento"].includes(trip.status)) return null;
+  const i = diffDays(todayISO(), trip.start);
+  return i >= 0 && i < trip.days ? i : null;
 }
-function scenarioStats(scenario, trip) {
-  const total = scenario.costs.reduce((sum, c) => sum + costTotal(c, trip), 0);
-  const used = scenario.segments.reduce((sum, s) => sum + s.days, 0);
-  const cities = scenario.segments.filter(s => !s.transit);
-  const transitDays = scenario.segments.filter(s => s.transit).reduce((sum, s) => sum + s.days, 0);
-  const nonRefundable = scenario.costs.filter(c => c.status !== "Estimado").reduce((sum, c) => sum + costTotal(c, trip), 0);
+const activeTrip = () => state.trips.filter(t => activeDayIndex(t) != null).sort((a, b) => (b.status === "andamento") - (a.status === "andamento"))[0] || null;
+
+function costBrl(cost, trip) { return cost.amount * (cost.rate || 1) * (cost.perPerson ? trip.travelers.length : 1); }
+function scenarioStats(sc, trip) {
+  const total = sc.costs.reduce((s, c) => s + costBrl(c, trip), 0);
+  const used = sc.segments.reduce((s, x) => s + x.days, 0);
+  const cities = sc.segments.filter(s => !s.transit);
   return {
-    total, used, free: trip.days - used, cities: cities.length, transitDays,
+    total, used, free: trip.days - used, cities: cities.length,
+    transitDays: sc.segments.filter(s => s.transit).reduce((s, x) => s + x.days, 0),
     hotelChanges: Math.max(0, cities.length - 1),
-    perPerson: total / trip.travelers.length,
+    perPerson: total / Math.max(1, trip.travelers.length),
     perDay: total / Math.max(1, trip.days),
-    committed: nonRefundable,
-    nights: Math.max(0, trip.days - 1)
+    committed: sc.costs.filter(c => c.status !== "Estimado").reduce((s, c) => s + costBrl(c, trip), 0)
   };
 }
-function dateFor(trip, dayIndex) {
-  if (!trip.start) return null;
-  const d = new Date(`${trip.start}T12:00:00`);
-  d.setDate(d.getDate() + dayIndex);
-  return d;
+function dayList(trip) {
+  const sc = chosenScenario(trip);
+  const days = [];
+  for (const seg of sc.segments) for (let i = 0; i < seg.days; i += 1) days.push({ city: seg.city, transit: !!seg.transit });
+  while (days.length < trip.days) days.push({ city: "A definir", transit: false });
+  return days.slice(0, Math.max(trip.days, 1));
 }
-const fmtDate = d => d ? d.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "short" }).replace(".", "") : "";
-
-/* ---------- UI helpers ---------- */
-function toast(message) {
-  const el = document.querySelector("#toast");
-  el.textContent = message;
-  el.classList.add("show");
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => el.classList.remove("show"), 2400);
+function bookingsForDay(trip, i) {
+  if (!trip.start) return [];
+  const d = dayISO(trip, i);
+  return trip.bookings.filter(b => b.date && b.date <= d && d <= (b.dateEnd || b.date));
 }
-
-const sheet = document.querySelector("#sheet");
-const sheetForm = document.querySelector("#sheetForm");
-/** Abre um formulário em folha e devolve os valores (ou null). */
-function ask(title, fields, { confirm = "Salvar", danger = false } = {}) {
-  return new Promise(resolve => {
-    const body = fields.map(f => {
-      if (f.type === "select") {
-        return `<label>${esc(f.label)}<select name="${f.name}">${f.options.map(o => `<option ${o === f.value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
-      }
-      if (f.type === "checks") {
-        return `<fieldset><legend>${esc(f.label)}</legend><div class="chips">${f.options.map(o => `<label class="chip"><input type="checkbox" name="${f.name}" value="${esc(o)}" ${f.value.includes(o) ? "checked" : ""}><span>${esc(o)}</span></label>`).join("")}</div></fieldset>`;
-      }
-      if (f.type === "checkbox") {
-        return `<label class="check"><input type="checkbox" name="${f.name}" ${f.value ? "checked" : ""}><span>${esc(f.label)}</span></label>`;
-      }
-      if (f.type === "textarea") {
-        return `<label>${esc(f.label)}<textarea name="${f.name}" rows="3" placeholder="${esc(f.placeholder || "")}">${esc(f.value || "")}</textarea></label>`;
-      }
-      const attrs = f.type === "money" ? 'inputmode="decimal" autocomplete="off"' : "";
-      const type = f.type === "money" ? "text" : f.type || "text";
-      return `<label>${esc(f.label)}<input type="${type}" name="${f.name}" value="${esc(f.value ?? "")}" placeholder="${esc(f.placeholder || "")}" ${f.required ? "required" : ""} ${f.min != null ? `min="${f.min}"` : ""} ${attrs}></label>${f.hint ? `<small class="hint">${esc(f.hint)}</small>` : ""}`;
-    }).join("");
-    sheetForm.innerHTML = `
-      <div class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Fechar">×</button></div>
-      <div class="sheet-body">${body}</div>
-      <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn ${danger ? "danger" : "primary"}" value="ok">${esc(confirm)}</button></div>`;
-    const finish = value => { sheet.close(); sheet.onclose = null; resolve(value); };
-    sheet.onclose = () => resolve(null);
-    sheetForm.onsubmit = event => {
-      event.preventDefault();
-      const data = new FormData(sheetForm);
-      const out = {};
-      for (const f of fields) {
-        if (f.type === "checks") out[f.name] = data.getAll(f.name);
-        else if (f.type === "checkbox") out[f.name] = data.has(f.name);
-        else out[f.name] = data.get(f.name);
-      }
-      finish(out);
-    };
-    sheetForm.querySelectorAll("[data-close]").forEach(b => b.onclick = () => finish(null));
-    sheet.showModal();
-    sheetForm.querySelector("input:not([type=checkbox]),textarea,select")?.focus();
-  });
-}
-function money2(raw) {
-  try { return parseMoneyExpression(raw); } catch { toast("Valor ou cálculo inválido."); return null; }
+function tripCosts(trip) {
+  const byCat = {};
+  if (trip.pastCosts) Object.entries(trip.pastCosts).forEach(([c, v]) => { if (v > 0) byCat[c] = v; });
+  else if (trip.status === "concluida" && trip.expenses.length) trip.expenses.forEach(e => { byCat[e.cat || "Outros"] = (byCat[e.cat || "Outros"] || 0) + expenseTotal(e); });
+  else chosenScenario(trip).costs.forEach(c => { byCat[c.cat] = (byCat[c.cat] || 0) + costBrl(c, trip); });
+  return { byCat, total: Object.values(byCat).reduce((s, v) => s + v, 0) };
 }
 
-/* ---------- renderização ---------- */
-function render(keepScroll = false) {
-  const app = document.querySelector("#app");
-  const trip = currentTrip();
-  if (route()[0] === "t" && !trip) { location.hash = "#/"; return; }
-  app.innerHTML = trip ? renderTrip(trip) : renderHome();
-  if (!keepScroll) window.scrollTo(0, 0);
-  setStatus(syncToken() ? (syncStatus === "off" ? "ok" : syncStatus) : "off");
+const commit = (keepScroll = false) => { save(); render(keepScroll); };
+
+/* ---------- Home ---------- */
+function tripCard(trip) {
+  const sc = chosenScenario(trip);
+  const st = scenarioStats(sc, trip);
+  const cities = sc.segments.filter(s => !s.transit).map(s => s.city).join(" → ");
+  const when = trip.start ? `${fmtShort(trip.start)} · ` : "";
+  const cost = tripCosts(trip).total;
+  return `<a class="trip-card ${trip.status}" href="#/t/${trip.id}" data-trip="${trip.id}">
+    <div class="trip-card-top"><span class="pill ${trip.status}">${TRIP_STATUS[trip.status]}</span>${trip.scenarios.length > 1 ? `<span class="muted">${trip.scenarios.length} cenários</span>` : ""}</div>
+    <h2>${esc(trip.name)}</h2>
+    <p class="muted">${esc(cities || trip.destName || trip.country)}</p>
+    <div class="trip-card-foot">
+      <div><small>${when}${plural(trip.days, "dia", "dias")} · ${plural(trip.travelers.length, "pessoa", "pessoas")}</small></div>
+      <div class="num"><small>${trip.status === "concluida" ? "gasto" : trip.status === "rascunho" || trip.status === "desejo" ? "estimativa" : "orçamento"}</small><strong>${brl(trip.status === "concluida" ? cost : st.total)}</strong></div>
+    </div></a>`;
+}
+
+function upcomingDeadlines() {
+  const today = todayISO();
+  const out = [];
+  for (const trip of state.trips) {
+    if (["concluida", "desejo"].includes(trip.status)) continue;
+    for (const b of trip.bookings) {
+      if (b.done) continue;
+      for (const [date, label] of [[b.freeCancelUntil, "Cancelamento grátis até"], [b.deadline, "Pagamento / prazo"]]) {
+        if (!date) continue;
+        const left = diffDays(date, today);
+        if (left >= -1 && left <= 14) out.push({ trip, b, date, label, left });
+      }
+    }
+  }
+  return out.sort((a, b) => a.left - b.left);
 }
 
 function renderHome() {
-  const sorted = [...state.trips].sort((a, b) => (a.status === "rascunho") - (b.status === "rascunho"));
-  const cards = sorted.map(trip => {
-    const sc = trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
-    const st = scenarioStats(sc, trip);
-    const cities = sc.segments.filter(s => !s.transit).map(s => s.city).join(" → ");
-    return `<a class="trip-card ${trip.status}" href="#/t/${trip.id}">
-      <div class="trip-card-top"><span class="pill ${trip.status}">${TRIP_STATUS[trip.status]}</span>${trip.scenarios.length > 1 ? `<span class="muted">${trip.scenarios.length} cenários</span>` : ""}</div>
-      <h2>${esc(trip.name)}</h2>
-      <p class="muted">${esc(cities)}</p>
-      <div class="trip-card-foot">
-        <div><small>${plural(trip.days, "dia", "dias")} · ${plural(trip.travelers.length, "pessoa", "pessoas")}</small></div>
-        <div class="num"><small>${trip.status === "rascunho" ? "estimativa" : "orçamento"}</small><strong>${brl(st.total)}</strong></div>
-      </div>
-    </a>`;
-  }).join("");
+  const act = activeTrip();
+  const idx = act ? activeDayIndex(act) : null;
+  const activeCard = act ? `<section class="today-card">
+      <div class="today-top"><span class="pill chosen">Hoje na viagem</span><span class="wx" data-wx="${idx}"></span></div>
+      <h2>${esc(dayList(act)[idx]?.city || act.name)}</h2>
+      <p class="muted">${esc(act.name)} · dia ${idx + 1} de ${act.days} · ${fmtDay(dayISO(act, idx))}</p>
+      <div class="inline-actions">
+        <a class="btn primary" href="#/t/${act.id}" data-open-hoje="${act.id}">Abrir o dia</a>
+        <button class="btn soft" data-act="exp-quick" data-trip="${act.id}">+ Despesa</button>
+      </div></section>` : "";
+  const dl = upcomingDeadlines();
+  const deadlines = dl.length ? `<section class="alerts"><h3>Prazos próximos</h3>${dl.slice(0, 5).map(x => `<a href="#/t/${x.trip.id}" data-goto-tab="reservas" class="alert-row ${x.left <= 3 ? "urgent" : ""}"><span><b>${esc(x.b.desc)}</b><small>${x.label} ${fmtShort(x.date)} · ${esc(x.trip.name)}</small></span><b>${x.left <= 0 ? "hoje" : `${x.left} d`}</b></a>`).join("")}</section>` : "";
+
+  const by = s => state.trips.filter(t => s.includes(t.status));
+  const order = { andamento: 0, planejada: 1, rascunho: 2 };
+  let body = "";
+  if (ui.home === "viagens") {
+    const list = by(["andamento", "planejada", "rascunho"]).sort((a, b) => order[a.status] - order[b.status] || (a.start || "9").localeCompare(b.start || "9"));
+    body = list.map(tripCard).join("") || `<div class="empty big"><div class="empty-art">✈️</div><h2>Nenhuma viagem ainda</h2><p>Comece com um rascunho: monte cenários de rota, compare custos e depois confirme a melhor opção.</p><button class="btn primary" data-act="new-trip">Criar primeira viagem</button></div>`;
+  } else if (ui.home === "desejos") {
+    const list = by(["desejo"]);
+    body = `<p class="muted">Viagens que você quer fazer, ainda sem data. Quando decidir, mude a situação para Rascunho.</p>${list.map(tripCard).join("") || `<div class="empty"><p>Sua lista de desejos está vazia.</p></div>`}`;
+  } else if (ui.home === "historico") body = renderHistory();
+  else body = renderDestinations();
+
+  const addLabel = { viagens: "+ Nova viagem", desejos: "+ Desejo", historico: "+ Viagem passada", destinos: "+ Destino" }[ui.home];
+  const addAct = { viagens: "new-trip", desejos: "new-wish", historico: "new-past", destinos: "dest-add" }[ui.home];
   return `<header class="home-head">
-      <div><p class="eyebrow">Planejador</p><h1>Minhas viagens</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
-      <button class="btn primary" data-act="new-trip">+ Nova viagem</button>
+      <div><p class="eyebrow">Planejador</p><h1>Viagens</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
+      <button class="btn primary" data-act="${addAct}">${addLabel}</button>
     </header>
-    <main class="home">
-      ${cards || `<div class="empty big"><div class="empty-art">✈</div><h2>Nenhuma viagem ainda</h2><p>Comece com um rascunho: monte cenários de rota, compare custos e depois confirme a melhor opção.</p><button class="btn primary" data-act="new-trip">Criar primeira viagem</button></div>`}
-    </main>
+    ${activeCard}${deadlines}
+    <nav class="seg-tabs">${[["viagens", "Viagens"], ["desejos", "Desejos"], ["historico", "Histórico"], ["destinos", "Destinos"]].map(([id, l]) => `<button class="${ui.home === id ? "active" : ""}" data-home="${id}">${l}</button>`).join("")}</nav>
+    <main class="home">${body}</main>
     <footer class="home-foot">
       <button class="link" data-act="sync-setup">Sincronização</button>
       <button class="link" data-act="backup">Exportar backup</button>
@@ -259,12 +144,86 @@ function renderHome() {
     </footer>`;
 }
 
+/* ---------- Histórico e estatísticas ---------- */
+function renderHistory() {
+  const past = state.trips.filter(t => t.status === "concluida").sort((a, b) => (b.start || "").localeCompare(a.start || ""));
+  if (!past.length) return `<div class="empty"><p>Registre as viagens que você já fez para ver países visitados e custos médios.</p></div>`;
+  const costs = past.map(t => ({ t, ...tripCosts(t) }));
+  const withCost = costs.filter(c => c.total > 0);
+  const countries = [...new Set(past.map(t => t.country.trim()).filter(Boolean))];
+  const days = past.reduce((s, t) => s + t.days, 0);
+  const avg = (fn) => withCost.length ? withCost.reduce((s, c) => s + fn(c), 0) / withCost.length : 0;
+  const perDayAll = withCost.reduce((s, c) => s + c.total, 0) / Math.max(1, withCost.reduce((s, c) => s + c.t.days, 0));
+  const count = key => Object.entries(past.reduce((m, t) => { const k = key(t).trim(); if (k) m[k] = (m[k] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const catAvg = CATEGORIES.map(cat => {
+    const rows = costs.filter(c => c.byCat[cat] > 0);
+    return rows.length ? { cat, avg: rows.reduce((s, c) => s + c.byCat[cat], 0) / rows.length, n: rows.length } : null;
+  }).filter(Boolean);
+  return `<div class="kpi-grid">
+      <div class="kpi"><small>Viagens</small><strong>${past.length}</strong></div>
+      <div class="kpi"><small>Países</small><strong>${countries.length}</strong></div>
+      <div class="kpi"><small>Dias viajados</small><strong>${days}</strong></div>
+      <div class="kpi"><small>Custo médio</small><strong>${brl(avg(c => c.total))}</strong></div>
+      <div class="kpi"><small>Média por dia</small><strong>${brl(perDayAll)}</strong></div>
+      <div class="kpi"><small>Média por pessoa</small><strong>${brl(avg(c => c.total / Math.max(1, c.t.travelers.length)))}</strong></div>
+    </div>
+    <section class="card"><h2>Onde mais viajei</h2>
+      <div class="rank">${count(t => t.country).map(([k, n]) => `<div><span>${esc(k)}</span><b>${plural(n, "viagem", "viagens")}</b></div>`).join("") || `<p class="muted">Informe o país em cada viagem.</p>`}</div>
+      ${count(t => t.destName).length ? `<h3 class="sub">Destinos</h3><div class="rank">${count(t => t.destName).map(([k, n]) => `<div><span>${esc(k)}</span><b>${n}×</b></div>`).join("")}</div>` : ""}
+    </section>
+    ${catAvg.length ? `<section class="card"><h2>Média por categoria</h2><div class="rank">${catAvg.map(c => `<div><span>${CAT_ICON[c.cat]} ${c.cat}<small> · ${plural(c.n, "viagem", "viagens")}</small></span><b>${brl(c.avg)}</b></div>`).join("")}</div></section>` : ""}
+    <h3 class="sub">Viagens realizadas</h3>
+    ${past.map(t => { const c = tripCosts(t); return `<a class="row-link" href="#/t/${t.id}"><div><strong>${esc(t.name)}</strong><small>${[t.country, t.start ? fmtMonthYear(t.start) : "", plural(t.days, "dia", "dias")].filter(Boolean).join(" · ")}${t.wouldRepeat ? " · repetiria" : ""}</small></div><b>${c.total ? brl(c.total) : "—"}</b></a>`; }).join("")}`;
+}
+
+/* ---------- Destinos ---------- */
+function renderDestinations() {
+  const general = state.contacts.filter(c => !c.destId);
+  const list = state.destinations.slice().sort((a, b) => a.name.localeCompare(b.name));
+  return `<p class="muted">Guarde o que aprendeu sobre cada lugar: vale alugar carro, onde comer, perrengues e contatos.</p>
+    ${list.map(d => `<a class="row-link" href="#/d/${d.id}"><div><strong>${esc(d.name)}</strong><small>${esc([d.country, d.repeat ? "repetiria" : ""].filter(Boolean).join(" · "))}</small></div><span>›</span></a>`).join("") || `<div class="empty"><p>Nenhum destino cadastrado.</p></div>`}
+    <section class="card"><div class="card-head"><h2>Contatos gerais</h2><button class="btn soft sm" data-act="contact-add" data-dest="">+ Contato</button></div>
+      ${general.map(contactRow).join("") || `<p class="muted tiny">Guias, agências e contatos sem destino específico.</p>`}</section>`;
+}
+const contactRow = c => `<button class="row" data-act="contact-edit" data-id="${c.id}"><div><strong>${esc(c.name)}</strong><small>${esc([c.phone, c.instagram ? `@${c.instagram.replace(/^@/, "")}` : "", c.note].filter(Boolean).join(" · "))}</small></div></button>`;
+
+function renderDestPage(d) {
+  const contacts = state.contacts.filter(c => c.destId === d.id);
+  const related = state.trips.filter(t => t.destName && t.destName.toLowerCase() === d.name.toLowerCase());
+  const sec = (title, act, content) => `<section class="card"><div class="card-head"><h2>${title}</h2><button class="btn soft sm" data-act="${act}" data-id="${d.id}">Editar</button></div>${content}</section>`;
+  const val = v => v ? esc(v) : `<span class="muted">—</span>`;
+  const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  return `<header class="trip-head">
+      <div class="trip-head-top"><a class="back" href="#/" aria-label="Voltar">‹</a><button class="icon-btn" data-act="dest-menu" data-id="${d.id}" aria-label="Opções">⋯</button></div>
+      <h1>${esc(d.name)}</h1><p class="muted">${esc(d.country || "País não informado")}</p>
+      <label class="check big"><input type="checkbox" data-act="dest-repeat" data-id="${d.id}" ${d.repeat ? "checked" : ""}><span>Repetiria este destino</span></label>
+    </header>
+    <main class="tab-body">
+      ${sec("Resumo", "dest-edit-summary", `${kv("Pontos fortes", val(d.pros))}${kv("Pontos fracos", val(d.cons))}${kv("Perrengues", val(d.perrengues))}`)}
+      ${sec("Transporte", "dest-edit-transport", `${kv("O que usar", val(d.transport?.use))}${kv("Vale alugar carro?", val(d.transport?.car))}${kv("Tem metrô?", val(d.transport?.metro))}${d.transport?.notes ? kv("Notas", val(d.transport.notes)) : ""}`)}
+      <section class="card"><div class="card-head"><h2>Pontos turísticos</h2><button class="btn soft sm" data-act="attr-add" data-id="${d.id}">+ Ponto</button></div>
+        ${(d.attractions || []).map(a => `<div class="check-row ${a.visited ? "done" : ""}"><button class="check-btn" data-act="attr-toggle" data-id="${d.id}" data-a="${a.id}" aria-label="Marcar como conhecido">${a.visited ? "✓" : ""}</button><button class="check-text" data-act="attr-edit" data-id="${d.id}" data-a="${a.id}">${esc(a.name)}</button></div>`).join("") || `<p class="muted tiny">O que conhecer. Marque os que você já visitou.</p>`}
+      </section>
+      <section class="card"><div class="card-head"><h2>Alimentação</h2><button class="btn soft sm" data-act="food-add" data-id="${d.id}">+ Lugar</button></div>
+        ${(d.food || []).map(f => `<button class="row" data-act="food-edit" data-id="${d.id}" data-a="${f.id}"><div><strong>${esc(f.name)}</strong><small>${esc(f.note || "")}</small></div></button>`).join("") || `<p class="muted tiny">Restaurantes e pratos para lembrar.</p>`}
+      </section>
+      ${sec("Hospedagem", "dest-edit-lodging", `${kv("Faixa de preço", val(d.lodging?.range))}${kv("Opções disponíveis", val(d.lodging?.options))}${d.lodging?.notes ? kv("Notas", val(d.lodging.notes)) : ""}`)}
+      ${sec("Visto", "dest-edit-visa", `${kv("Precisa?", val(d.visa?.needed))}${kv("Requisitos", val(d.visa?.requirements))}`)}
+      <section class="card"><div class="card-head"><h2>Contatos úteis</h2><button class="btn soft sm" data-act="contact-add" data-dest="${d.id}">+ Contato</button></div>
+        ${contacts.map(contactRow).join("") || `<p class="muted tiny">Guias, agências locais, telefone e Instagram.</p>`}</section>
+      ${related.length ? `<section class="card"><h2>Viagens</h2>${related.map(t => `<a class="row-link" href="#/t/${t.id}"><div><strong>${esc(t.name)}</strong><small>${TRIP_STATUS[t.status]}</small></div><span>›</span></a>`).join("")}</section>` : ""}
+    </main>`;
+}
+
+/* ---------- Viagem ---------- */
 function renderTrip(trip) {
   const sc = activeScenario(trip);
   const st = scenarioStats(sc, trip);
-  const tabs = [["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["reservas", "Reservas"], ["despesas", "Despesas"]];
-  const content = { cenarios: tabScenarios, custos: tabCosts, roteiro: tabItinerary, reservas: tabBookings, despesas: tabExpenses }[ui.tab](trip, sc);
-  const dateLine = trip.start ? `${fmtDate(dateFor(trip, 0))} → ${fmtDate(dateFor(trip, trip.days - 1))}` : "Datas em aberto";
+  const isActive = activeDayIndex(trip) != null;
+  const tabs = [...(isActive ? [["hoje", "Hoje"]] : []), ["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["reservas", "Reservas"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]];
+  if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
+  const content = { hoje: tabHoje, cenarios: tabScenarios, custos: tabCosts, roteiro: tabItinerary, mapa: tabMap, reservas: tabBookings, despesas: tabExpenses, bagagem: tabChecklist }[ui.tab](trip, sc);
+  const dateLine = trip.start ? `${fmtDay(dayISO(trip, 0))} → ${fmtDay(dayISO(trip, trip.days - 1))}` : "Sem data definida";
   return `<header class="trip-head">
       <div class="trip-head-top">
         <a class="back" href="#/" aria-label="Voltar">‹</a>
@@ -272,7 +231,7 @@ function renderTrip(trip) {
       </div>
       <span class="pill ${trip.status}">${TRIP_STATUS[trip.status]}</span>
       <h1>${esc(trip.name)}</h1>
-      <p class="muted">${dateLine} · ${plural(trip.days, "dia", "dias")} · ${plural(trip.travelers.length, "pessoa", "pessoas")}</p>
+      <p class="muted">${[trip.country, dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
       <div class="kpis">
         <div><small>${trip.scenarios.length > 1 ? esc(sc.name) : "Total"}</small><strong>${brl(st.total)}</strong></div>
         <div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div>
@@ -280,7 +239,50 @@ function renderTrip(trip) {
       </div>
     </header>
     <nav class="tabs" role="tablist">${tabs.map(([id, label]) => `<button role="tab" class="${ui.tab === id ? "active" : ""}" data-tab="${id}">${label}</button>`).join("")}</nav>
-    <main class="tab-body">${content}</main>`;
+    <main class="tab-body">${content}</main>
+    ${["andamento", "planejada"].includes(trip.status) ? `<button class="fab" data-act="exp-quick" data-trip="${trip.id}" aria-label="Lançar despesa">+ Despesa</button>` : ""}`;
+}
+
+/* --- Hoje --- */
+function bookingAttachButtons(b) {
+  return (b.attachments || []).map(a => `<button class="mini" data-act="open-file" data-id="${a.id}" data-name="${esc(a.name)}" data-type="${esc(a.type || "")}" title="${esc(a.name)}">${(a.type || "").startsWith("image/") ? "🖼️" : "📄"}</button>`).join("");
+}
+function cancelTag(b) {
+  if (!b.freeCancelUntil) return "";
+  const left = diffDays(b.freeCancelUntil, todayISO());
+  return `<span class="tag ${left < 0 ? "Pago" : left <= 7 ? "Estimado" : "Reservado"}">${left < 0 ? "cancelamento grátis expirou" : `cancela grátis até ${fmtShort(b.freeCancelUntil)}`}</span>`;
+}
+function dayBody(trip, i) {
+  const items = (trip.itinerary[i] || []).slice().sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
+  const places = trip.places.filter(p => p.day === i);
+  const res = bookingsForDay(trip, i);
+  return `${items.length ? `<ul class="acts">${items.map(a => `<li><button data-act="act-edit" data-day="${i}" data-id="${a.id}">
+        <span class="time">${esc(a.time || "—")}</span>
+        <span class="act-main"><strong>${esc(a.title)}</strong>${a.note ? `<small>${esc(a.note)}</small>` : ""}</span>
+        ${a.cost ? `<span class="act-cost">${brl(a.cost)}</span>` : ""}</button></li>`).join("")}</ul>` : `<p class="muted tiny">Sem atividades.</p>`}
+    ${places.length ? `<div class="day-places"><b>Atrações no mapa</b>${places.map((p, n) => `<span>${n + 1}. ${esc(p.name)}</span>`).join("")}</div>` : ""}
+    <div class="inline-actions"><button class="btn soft sm" data-act="act-add" data-day="${i}">+ Atividade</button><button class="btn ghost sm" data-act="map-day" data-day="${i}">Mapa do dia</button></div>
+    ${res.length ? `<details class="res"><summary>Reservas do dia <span class="count">${res.length}</span></summary>${res.map(b => `<div class="res-row">
+        <button class="res-main" data-act="book-edit" data-id="${b.id}"><strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong><small>${[b.type, b.locator ? `Localizador ${esc(b.locator)}` : ""].filter(Boolean).join(" · ")}</small>${cancelTag(b)}</button>
+        <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`).join("")}</details>` : ""}`;
+}
+function tabHoje(trip) {
+  const days = dayList(trip);
+  const today = activeDayIndex(trip);
+  const i = Math.min(days.length - 1, Math.max(0, ui.hojeDay ?? today ?? 0));
+  const spent = trip.expenses.filter(e => e.date === dayISO(trip, i)).reduce((s, e) => s + expenseTotal(e), 0);
+  const done = trip.checklist.filter(c => c.done).length;
+  return `<article class="card day-hero">
+      <div class="day-nav"><button class="icon-btn" data-act="hoje-nav" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="Dia anterior">‹</button>
+        <div class="day-title"><span class="eyebrow">${i === today ? "Hoje" : `Dia ${i + 1}`}</span><h2>${esc(days[i].city)}</h2><small>Dia ${i + 1} de ${trip.days} · ${fmtDay(dayISO(trip, i))}</small></div>
+        <button class="icon-btn" data-act="hoje-nav" data-d="1" ${i === days.length - 1 ? "disabled" : ""} aria-label="Próximo dia">›</button></div>
+      <div class="wx big" data-wx="${i}"></div>
+    </article>
+    <article class="card">${dayBody(trip, i)}</article>
+    <div class="quick-grid">
+      <button class="quick" data-act="exp-quick" data-trip="${trip.id}"><b>${brl(spent)}</b><small>gasto no dia · lançar despesa</small></button>
+      <button class="quick" data-tab="bagagem"><b>${done}/${trip.checklist.length}</b><small>itens da bagagem</small></button>
+    </div>`;
 }
 
 /* --- Cenários --- */
@@ -289,10 +291,7 @@ function tabScenarios(trip) {
     const st = scenarioStats(sc, trip);
     const chosen = sc.id === trip.chosenId;
     const diff = st.free;
-    const note = diff === 0 ? `<span class="ok">✓ ${trip.days} dias distribuídos</span>`
-      : diff > 0 ? `<span class="warn">${plural(diff, "dia livre", "dias livres")}</span>`
-      : `<span class="bad">${plural(-diff, "dia", "dias")} acima do período</span>`;
-    const total = trip.days || 1;
+    const note = diff === 0 ? `<span class="ok">✓ ${trip.days} dias distribuídos</span>` : diff > 0 ? `<span class="warn">${plural(diff, "dia livre", "dias livres")}</span>` : `<span class="bad">${plural(-diff, "dia", "dias")} acima do período</span>`;
     const bar = sc.segments.map(s => `<i class="${s.transit ? "transit" : ""}" style="flex:${s.days}" title="${esc(s.city)}"></i>`).join("") + (diff > 0 ? `<i class="free" style="flex:${diff}"></i>` : "");
     const rows = sc.segments.map((s, i) => `
       <div class="seg ${s.transit ? "transit" : ""}">
@@ -309,10 +308,7 @@ function tabScenarios(trip) {
         </div>
       </div>`).join("");
     return `<article class="card scenario ${chosen ? "chosen" : ""}">
-      <div class="card-head">
-        <div><h2>${esc(sc.name)}</h2>${note}</div>
-        ${chosen ? `<span class="pill chosen">Escolhido</span>` : ""}
-      </div>
+      <div class="card-head"><div><h2>${esc(sc.name)}</h2>${note}</div>${chosen ? `<span class="pill chosen">Escolhido</span>` : ""}</div>
       <div class="routebar" aria-hidden="true">${bar}</div>
       <div class="route-text">${sc.segments.map(s => `${esc(s.city)} <b>${s.days}</b>`).join(" · ")}</div>
       <div class="segs">${rows}</div>
@@ -321,10 +317,8 @@ function tabScenarios(trip) {
         <button class="btn soft sm" data-act="seg-add-transit" data-sc="${sc.id}">+ Deslocamento</button>
       </div>
       <dl class="metrics">
-        <div><dt>Total</dt><dd>${brl(st.total)}</dd></div>
-        <div><dt>Por pessoa</dt><dd>${brl(st.perPerson)}</dd></div>
-        <div><dt>Destinos</dt><dd>${st.cities}</dd></div>
-        <div><dt>Trocas de hotel</dt><dd>${st.hotelChanges}</dd></div>
+        <div><dt>Total</dt><dd>${brl(st.total)}</dd></div><div><dt>Por pessoa</dt><dd>${brl(st.perPerson)}</dd></div>
+        <div><dt>Destinos</dt><dd>${st.cities}</dd></div><div><dt>Trocas de hotel</dt><dd>${st.hotelChanges}</dd></div>
       </dl>
       <div class="card-actions">
         ${chosen ? "" : `<button class="btn primary sm" data-act="sc-choose" data-sc="${sc.id}">Escolher este</button>`}
@@ -332,58 +326,43 @@ function tabScenarios(trip) {
         <button class="btn ghost sm" data-act="sc-dup" data-sc="${sc.id}">Duplicar</button>
         <button class="btn ghost sm" data-act="sc-rename" data-sc="${sc.id}">Renomear</button>
         ${trip.scenarios.length > 1 ? `<button class="btn ghost sm danger-text" data-act="sc-del" data-sc="${sc.id}">Excluir</button>` : ""}
-      </div>
-    </article>`;
+      </div></article>`;
   }).join("");
-
-  const compare = trip.scenarios.length > 1 ? renderCompare(trip) : "";
   return `<div class="section-head"><p class="muted">Monte rotas diferentes dentro do mesmo período e compare lado a lado.</p><button class="btn soft" data-act="sc-new">+ Novo cenário</button></div>
-    <div class="cards">${cards}</div>${compare}`;
+    <div class="cards">${cards}</div>${trip.scenarios.length > 1 ? renderCompare(trip) : ""}`;
 }
-
 function renderCompare(trip) {
   const stats = trip.scenarios.map(sc => ({ sc, st: scenarioStats(sc, trip) }));
   const cheapest = Math.min(...stats.map(x => x.st.total));
   const row = (label, fn, best) => `<tr><th>${label}</th>${stats.map(({ sc, st }) => `<td class="${best && best(st) ? "best" : ""}">${fn(st, sc)}</td>`).join("")}</tr>`;
-  return `<section class="card compare">
-    <h2>Comparação</h2>
-    <div class="table-scroll"><table>
-      <thead><tr><th></th>${stats.map(({ sc }) => `<th>${esc(sc.name)}${sc.id === trip.chosenId ? " ✓" : ""}</th>`).join("")}</tr></thead>
-      <tbody>
-        ${row("Total", st => brl(st.total), st => st.total === cheapest && stats.length > 1)}
-        ${row("Por pessoa", st => brl(st.perPerson))}
-        ${row("Por dia", st => brl(st.perDay))}
-        ${row("Destinos", st => st.cities)}
-        ${row("Trocas de hotel", st => st.hotelChanges)}
-        ${row("Dias em deslocamento", st => st.transitDays)}
-        ${row("Dias sem destino", st => st.free > 0 ? st.free : "—")}
-        ${row("Já reservado/pago", st => brl(st.committed))}
-      </tbody>
-    </table></div>
-  </section>`;
+  return `<section class="card compare"><h2>Comparação</h2><div class="table-scroll"><table>
+    <thead><tr><th></th>${stats.map(({ sc }) => `<th>${esc(sc.name)}${sc.id === trip.chosenId ? " ✓" : ""}</th>`).join("")}</tr></thead>
+    <tbody>
+      ${row("Total", st => brl(st.total), st => st.total === cheapest)}
+      ${row("Por pessoa", st => brl(st.perPerson))}${row("Por dia", st => brl(st.perDay))}
+      ${row("Destinos", st => st.cities)}${row("Trocas de hotel", st => st.hotelChanges)}
+      ${row("Dias em deslocamento", st => st.transitDays)}${row("Dias sem destino", st => st.free > 0 ? st.free : "—")}
+      ${row("Já reservado/pago", st => brl(st.committed))}
+    </tbody></table></div></section>`;
 }
 
 /* --- Custos --- */
 function tabCosts(trip, sc) {
   const st = scenarioStats(sc, trip);
-  const picker = trip.scenarios.length > 1
-    ? `<div class="chips scroll">${trip.scenarios.map(s => `<button class="chip-btn ${s.id === sc.id ? "active" : ""}" data-act="sc-view" data-sc="${s.id}">${esc(s.name)}${s.id === trip.chosenId ? " ✓" : ""}</button>`).join("")}</div>`
-    : "";
+  const picker = trip.scenarios.length > 1 ? `<div class="chips scroll">${trip.scenarios.map(s => `<button class="chip-btn ${s.id === sc.id ? "active" : ""}" data-act="sc-view" data-sc="${s.id}">${esc(s.name)}${s.id === trip.chosenId ? " ✓" : ""}</button>`).join("")}</div>` : "";
   const groups = CATEGORIES.map(cat => {
     const items = sc.costs.filter(c => c.cat === cat);
     if (!items.length) return "";
-    const sub = items.reduce((sum, c) => sum + costTotal(c, trip), 0);
-    return `<section class="group">
-      <div class="group-head"><span>${CAT_ICON[cat]} ${cat}</span><strong>${brl(sub)}</strong></div>
+    return `<section class="group"><div class="group-head"><span>${CAT_ICON[cat]} ${cat}</span><strong>${brl(items.reduce((s, c) => s + costBrl(c, trip), 0))}</strong></div>
       ${items.map(c => {
         const seg = c.segId ? sc.segments.find(s => s.id === c.segId) : null;
-        const detail = [seg ? seg.city : "Geral", c.cur && c.cur !== "BRL" ? `${c.amount.toLocaleString("pt-BR")} ${c.cur} × ${c.rate}` : "", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
+        const foreign = c.cur && c.cur !== "BRL";
+        const unit = c.perPerson ? trip.travelers.length : 1;
+        const detail = [seg ? seg.city : "Geral", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
         return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}">
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
-          <div class="row-right"><b>${brl(costTotal(c, trip))}</b><span class="tag ${c.status}">${c.status}</span></div>
-        </button>`;
-      }).join("")}
-    </section>`;
+          <div class="row-right"><b>${brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
+      }).join("")}</section>`;
   }).join("");
   return `${picker}
     <div class="section-head"><p class="muted">Custos de <b>${esc(sc.name)}</b>. Aceita cálculos: <code>2.400 ÷ 4</code> ou <code>180 x 7</code>.</p><button class="btn primary" data-act="cost-add" data-sc="${sc.id}">+ Custo</button></div>
@@ -392,47 +371,92 @@ function tabCosts(trip, sc) {
 }
 
 /* --- Roteiro --- */
-function itineraryDays(trip) {
-  const sc = trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
-  const days = [];
-  for (const seg of sc.segments) for (let i = 0; i < seg.days; i += 1) days.push({ city: seg.city, transit: seg.transit });
-  while (days.length < trip.days) days.push({ city: "A definir", transit: false });
-  return days;
-}
 function tabItinerary(trip) {
-  const days = itineraryDays(trip);
-  const sc = trip.scenarios.find(s => s.id === trip.chosenId);
-  const warn = trip.status === "rascunho" ? `<p class="notice">Este é o roteiro do cenário escolhido (<b>${esc(sc.name)}</b>). Ele ainda pode mudar enquanto a viagem for rascunho.</p>` : "";
-  let lastCity = null;
+  const days = dayList(trip);
+  const sc = chosenScenario(trip);
+  let last = null;
   const html = days.map((day, i) => {
-    const items = (trip.itinerary[i] || []).slice().sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
-    const date = dateFor(trip, i);
-    const header = day.city !== lastCity ? `<div class="city-sep">${esc(day.city)}</div>` : "";
-    lastCity = day.city;
+    const header = day.city !== last ? `<div class="city-sep">${esc(day.city)}</div>` : "";
+    last = day.city;
     return `${header}<article class="day">
-      <div class="day-head"><div><span class="day-n">Dia ${i + 1}</span>${date ? `<span class="muted"> · ${fmtDate(date)}</span>` : ""}</div>
-        <button class="btn soft sm" data-act="act-add" data-day="${i}">+ Atividade</button></div>
-      ${items.length ? `<ul class="acts">${items.map(a => `<li><button data-act="act-edit" data-day="${i}" data-id="${a.id}">
-          <span class="time">${esc(a.time || "—")}</span>
-          <span class="act-main"><strong>${esc(a.title)}</strong>${a.note ? `<small>${esc(a.note)}</small>` : ""}</span>
-          ${a.cost ? `<span class="act-cost">${brl(a.cost)}</span>` : ""}
-        </button></li>`).join("")}</ul>` : `<p class="muted tiny">Sem atividades.</p>`}
-    </article>`;
+      <div class="day-head"><div><span class="day-n">Dia ${i + 1}</span>${trip.start ? `<span class="muted"> · ${fmtDay(dayISO(trip, i))}</span>` : ""}</div><span class="wx" data-wx="${i}"></span></div>
+      ${dayBody(trip, i)}</article>`;
   }).join("");
-  return `${warn}<div class="days">${html}</div>`;
+  return `${trip.status === "rascunho" ? `<p class="notice">Roteiro do cenário escolhido (<b>${esc(sc.name)}</b>). Ele pode mudar enquanto a viagem for rascunho.</p>` : ""}
+    ${!trip.start ? `<p class="notice">Defina a data de saída nas opções da viagem para ver previsão do tempo e reservas por dia.</p>` : ""}
+    <div class="days">${html}</div>`;
+}
+
+/* --- Mapa --- */
+function mapPlaces(trip) {
+  return trip.places.filter(p => (!ui.mapCity || p.city === ui.mapCity) && (ui.mapDay === "" || p.day === Number(ui.mapDay)));
+}
+function tabMap(trip) {
+  const cities = [...new Set(chosenScenario(trip).segments.filter(s => !s.transit).map(s => s.city))];
+  const list = mapPlaces(trip);
+  const dayOpts = dayList(trip).map((d, i) => `<option value="${i}" ${String(i) === String(ui.mapDay) ? "selected" : ""}>Dia ${i + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, i))}` : ""}</option>`).join("");
+  return `<div class="chips scroll"><button class="chip-btn ${ui.mapCity === "" ? "active" : ""}" data-act="map-city" data-city="">Todas</button>${cities.map(c => `<button class="chip-btn ${ui.mapCity === c ? "active" : ""}" data-act="map-city" data-city="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+    <div class="section-head"><select id="mapDaySel" aria-label="Filtrar por dia"><option value="">Todos os dias</option>${dayOpts}</select><button class="btn primary" data-act="place-add">+ Local</button></div>
+    <div id="map" class="map" role="application" aria-label="Mapa de atrações"></div>
+    ${list.length ? `<div class="inline-actions"><a class="btn soft sm" target="_blank" rel="noopener" href="${gmapsRoute(list)}">Abrir rota no Google Maps</a></div>` : ""}
+    <div class="card list" id="placeList">${list.map((p, n) => `<div class="place ${p.visited ? "done" : ""}" draggable="true" data-pid="${p.id}">
+        <span class="grip" aria-hidden="true">⋮⋮</span><span class="num-badge">${n + 1}</span>
+        <button class="place-main" data-act="place-edit" data-id="${p.id}"><strong>${esc(p.name)}</strong><small>${[p.city, p.day != null ? `Dia ${p.day + 1}` : ""].filter(Boolean).join(" · ")}</small></button>
+        <div class="seg-tools"><button data-act="place-move" data-id="${p.id}" data-d="-1" ${n === 0 ? "disabled" : ""} aria-label="Subir">↑</button><button data-act="place-move" data-id="${p.id}" data-d="1" ${n === list.length - 1 ? "disabled" : ""} aria-label="Descer">↓</button></div>
+      </div>`).join("") || `<div class="empty"><p>Pesquise um local para colocar o primeiro pin.</p></div>`}</div>
+    <p class="muted tiny">Arraste os pins no mapa para ajustar a posição e arraste a lista (ou use ↑ ↓) para definir a ordem do percurso.</p>`;
+}
+const gmapsRoute = list => {
+  if (list.length === 1) return `https://www.google.com/maps/search/?api=1&query=${list[0].lat},${list[0].lon}`;
+  const pt = p => `${p.lat},${p.lon}`;
+  const mid = list.slice(1, -1).map(pt).join("|");
+  return `https://www.google.com/maps/dir/?api=1&travelmode=walking&origin=${pt(list[0])}&destination=${pt(list.at(-1))}${mid ? `&waypoints=${encodeURIComponent(mid)}` : ""}`;
+};
+let mapRef = null;
+async function initMap(trip) {
+  const el = document.getElementById("map");
+  if (!el) return;
+  try {
+    const L = await loadLeaflet();
+    if (!document.getElementById("map")) return;
+    mapRef?.remove();
+    const list = mapPlaces(trip);
+    const map = L.map(el, { zoomControl: true, attributionControl: true });
+    mapRef = map;
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+    const pts = [];
+    list.forEach((p, n) => {
+      const icon = L.divIcon({ className: "pin", html: `<span>${n + 1}</span>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+      const marker = L.marker([p.lat, p.lon], { draggable: true, icon, title: p.name }).addTo(map);
+      marker.bindTooltip(p.name);
+      marker.on("dragend", () => { const ll = marker.getLatLng(); p.lat = ll.lat; p.lon = ll.lng; save(); });
+      pts.push([p.lat, p.lon]);
+    });
+    if (list.length > 1) L.polyline(pts, { color: "#2B2A27", weight: 2, dashArray: "5 6", opacity: .6 }).addTo(map);
+    if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
+    else {
+      const city = ui.mapCity || chosenScenario(trip).segments.find(s => !s.transit)?.city;
+      const geo = city ? await geocodeCity(city).catch(() => null) : null;
+      map.setView(geo ? [geo.lat, geo.lon] : [20, 0], geo ? 12 : 2);
+    }
+  } catch {
+    el.innerHTML = `<p class="map-off">Mapa indisponível sem internet. A lista abaixo continua valendo.</p>`;
+  }
 }
 
 /* --- Reservas --- */
 function tabBookings(trip) {
-  const open = trip.bookings.filter(b => !b.done);
-  const done = trip.bookings.filter(b => b.done);
+  const sorted = trip.bookings.slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
+  const open = sorted.filter(b => !b.done), done = sorted.filter(b => b.done);
   const item = b => `<div class="booking ${b.done ? "done" : ""}">
     <button class="check-btn" data-act="book-toggle" data-id="${b.id}" aria-label="Marcar como feito">${b.done ? "✓" : ""}</button>
     <button class="booking-main" data-act="book-edit" data-id="${b.id}">
-      <strong>${esc(b.desc)}</strong>
-      <small>${[b.type, b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${new Date(`${b.deadline}T12:00`).toLocaleDateString("pt-BR")}` : ""].filter(Boolean).join(" · ")}</small>
-    </button></div>`;
-  return `<div class="section-head"><p class="muted">O que falta reservar, localizadores e prazos de pagamento ou cancelamento.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
+      <strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong>
+      <small>${[b.type, b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ")}</small>
+      ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Cancelamento: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
+    </button>
+    <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
+  return `<div class="section-head"><p class="muted">Reservas, localizadores, condições de cancelamento e prazos.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
     ${open.length ? `<div class="card list">${open.map(item).join("")}</div>` : `<div class="empty"><p>Nada pendente.</p></div>`}
     ${done.length ? `<h3 class="sub">Concluídas</h3><div class="card list">${done.map(item).join("")}</div>` : ""}`;
 }
@@ -441,210 +465,92 @@ function tabBookings(trip) {
 function tabExpenses(trip) {
   const balances = calculateBalances(trip.expenses, trip.travelers);
   const moves = settle(balances);
-  const pending = trip.expenses.filter(e => !e.participants.length);
-  const total = trip.expenses.reduce((s, e) => s + e.amount, 0);
+  const pending = trip.expenses.filter(e => !e.participants.length && !e.shares);
+  const total = trip.expenses.reduce((s, e) => s + expenseTotal(e), 0);
+  const card = trip.expenses.filter(e => e.card);
+  const cardTotal = card.reduce((s, e) => s + expenseTotal(e), 0);
+  const cards = card.reduce((m, e) => { const k = e.cardName || "Cartão de crédito"; m[k] = (m[k] || 0) + expenseTotal(e); return m; }, {});
   const balRows = Object.entries(balances).map(([name, v]) => `<div class="bal"><span>${esc(name)}</span><b class="${v > 0.005 ? "pos" : v < -0.005 ? "neg" : ""}">${v > 0.005 ? "recebe " : v < -0.005 ? "deve " : "quitado "}${Math.abs(v) > 0.005 ? brl(Math.abs(v)) : ""}</b></div>`).join("");
   return `<div class="section-head"><p class="muted">Lance o que foi pago e quem divide. Aceita cálculos: <code>2.400 ÷ 4</code>.</p><button class="btn primary" data-act="exp-add">+ Despesa</button></div>
-    ${trip.expenses.length ? `<section class="card">
-      <h2>Saldos</h2>${balRows}
+    ${trip.expenses.length ? `<div class="kpi-grid two"><div class="kpi"><small>Total gasto</small><strong>${brl(total)}</strong></div><div class="kpi"><small>No cartão de crédito</small><strong>${brl(cardTotal)}</strong></div></div>
+    ${Object.keys(cards).length > 1 ? `<div class="card"><h3 class="sub">Por cartão</h3>${Object.entries(cards).map(([k, v]) => `<div class="bal"><span>${esc(k)}</span><b>${brl(v)}</b></div>`).join("")}</div>` : ""}
+    <section class="card"><h2>Saldos</h2>${balRows}
       ${moves.length ? `<div class="moves">${moves.map(m => `<p><b>${esc(m.from)}</b> paga <b>${brl(m.amount)}</b> a <b>${esc(m.to)}</b></p>`).join("")}</div>` : ""}
-      ${pending.length ? `<p class="notice">${plural(pending.length, "despesa aguardando divisão", "despesas aguardando divisão")}.</p>` : ""}
-    </section>
-    <section class="card list">
-      <div class="group-head"><span>Lançamentos</span><strong>${brl(total)}</strong></div>
-      ${trip.expenses.slice().reverse().map(e => `<button class="row" data-act="exp-edit" data-id="${e.id}">
-        <div><strong>${esc(e.desc)}</strong><small>Pago por ${esc(e.paidBy)} · ${e.participants.length ? `${brl(e.amount / e.participants.length)} × ${e.participants.length}` : "dividir depois"}</small></div>
-        <div class="row-right"><b>${brl(e.amount)}</b></div></button>`).join("")}
-    </section>
+      ${pending.length ? `<p class="notice">${plural(pending.length, "despesa aguardando divisão", "despesas aguardando divisão")}.</p>` : ""}</section>
+    <section class="card list"><div class="group-head"><span>Lançamentos</span><strong>${brl(total)}</strong></div>
+      ${trip.expenses.slice().reverse().map(e => {
+        const who = e.shares ? "valores individuais" : e.participants.length ? (e.participants.length === 1 && e.participants[0] === e.paidBy ? "só pagador" : `${brl(expenseTotal(e) / e.participants.length)} × ${e.participants.length}`) : "dividir depois";
+        const foreign = e.cur && e.cur !== "BRL";
+        return `<button class="row" data-act="exp-edit" data-id="${e.id}"><div><strong>${CAT_ICON[e.cat] || ""} ${esc(e.desc)}</strong><small>${[e.date ? fmtShort(e.date) : "", `pago por ${esc(e.paidBy)}`, who, e.tipPct ? `gorjeta ${e.tipPct}%` : "", e.card ? "💳 cartão" : ""].filter(Boolean).join(" · ")}</small></div>
+          <div class="row-right"><b>${brl(expenseTotal(e))}</b>${foreign ? `<small>${e.orig.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(e.cur)}</small>` : ""}</div></button>`;
+      }).join("")}</section>
     <div class="inline-actions"><button class="btn ghost sm" data-act="exp-csv">Exportar CSV</button></div>`
     : `<div class="empty"><p>Nenhuma despesa lançada.</p></div>`}`;
 }
 
-/* ---------- ações ---------- */
-const actions = {
-  async "new-trip"() {
-    const v = await ask("Nova viagem", [
-      { name: "name", label: "Nome", required: true, placeholder: "Ex.: Europa 2027" },
-      { name: "days", label: "Duração (dias)", type: "number", value: 15, min: 1, required: true },
-      { name: "start", label: "Data de saída (opcional)", type: "date" },
-      { name: "travelers", label: "Viajantes", value: "Eu", hint: "Separe por vírgula. Ex.: Eduardo, Ana", required: true }
-    ], { confirm: "Criar rascunho" });
-    if (!v) return;
-    const travelers = v.travelers.split(",").map(s => s.trim()).filter(Boolean);
-    const trip = newTrip({ name: v.name.trim(), days: Math.max(1, Number(v.days)), travelers: travelers.length ? travelers : ["Eu"], start: v.start });
-    state.trips.push(trip);
-    ui.tab = "cenarios"; ui.scenarioId = null;
-    save();
-    location.hash = `#/t/${trip.id}`;
-  },
+/* --- Bagagem --- */
+function tabChecklist(trip) {
+  const groups = [...new Set(trip.checklist.map(i => i.group || "Outros"))];
+  const done = trip.checklist.filter(i => i.done).length;
+  return `<div class="section-head"><p class="muted"><b>${done}/${trip.checklist.length}</b> itens conferidos nesta viagem.</p><button class="btn primary" data-act="chk-add">+ Item</button></div>
+    ${groups.map(g => `<section class="card list"><div class="group-head"><span>${esc(g)}</span><small>${trip.checklist.filter(i => (i.group || "Outros") === g && i.done).length}/${trip.checklist.filter(i => (i.group || "Outros") === g).length}</small></div>
+      ${trip.checklist.filter(i => (i.group || "Outros") === g).map(i => `<div class="check-row ${i.done ? "done" : ""}"><button class="check-btn" data-act="chk-toggle" data-id="${i.id}" aria-label="Conferir">${i.done ? "✓" : ""}</button><button class="check-text" data-act="chk-toggle" data-id="${i.id}">${esc(i.text)}</button><button class="mini" data-act="chk-edit" data-id="${i.id}" aria-label="Editar">⋯</button></div>`).join("")}</section>`).join("")}
+    <div class="inline-actions">
+      <button class="btn ghost sm" data-act="chk-reset">Desmarcar tudo</button>
+      <button class="btn ghost sm" data-act="chk-save-template">Salvar como lista padrão</button>
+      <button class="btn ghost sm" data-act="chk-load-template">Trazer itens da lista padrão</button>
+    </div>`;
+}
 
-  async "trip-menu"() {
-    const trip = currentTrip();
-    const v = await ask("Opções da viagem", [
-      { name: "name", label: "Nome", value: trip.name, required: true },
-      { name: "days", label: "Duração (dias)", type: "number", value: trip.days, min: 1 },
-      { name: "start", label: "Data de saída", type: "date", value: trip.start },
-      { name: "travelers", label: "Viajantes", value: trip.travelers.join(", ") },
-      { name: "status", label: "Situação", type: "select", options: Object.values(TRIP_STATUS), value: TRIP_STATUS[trip.status] },
-      { name: "del", label: "Excluir esta viagem", type: "checkbox", value: false }
-    ]);
-    if (!v) return;
-    if (v.del) { state.trips = state.trips.filter(t => t.id !== trip.id); state.deleted[trip.id] = Date.now(); save(); location.hash = "#/"; return; }
-    trip.name = v.name.trim() || trip.name;
-    trip.days = Math.max(1, Number(v.days) || trip.days);
-    trip.start = v.start;
-    const names = v.travelers.split(",").map(s => s.trim()).filter(Boolean);
-    if (names.length) trip.travelers = names;
-    trip.status = Object.entries(TRIP_STATUS).find(([, label]) => label === v.status)?.[0] || trip.status;
-    commit();
-  },
-
-  async "sync-setup"() {
-    const v = await ask("Sincronização", [
-      { name: "token", label: "Token de acesso do GitHub", value: syncToken(), placeholder: "github_pat_…", hint: "Use o mesmo token em cada aparelho. Ele fica guardado só neste aparelho. Deixe vazio para desligar." }
-    ], { confirm: "Salvar e sincronizar" });
-    if (!v) return;
-    try { localStorage.setItem(SYNC_KEY, JSON.stringify({ token: v.token.trim() })); } catch { toast("Não consegui guardar o token."); return; }
-    if (!v.token.trim()) { setStatus("off"); return; }
-    dirty = true;
-    await sync();
-    toast(syncStatus === "ok" ? "Sincronizado." : "Não consegui sincronizar. Confira o token.");
-  },
-
-  backup() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `viagens-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  },
-  restore() { document.querySelector("#restoreFile").click(); },
-
-  /* cenários */
-  async "sc-new"() {
-    const trip = currentTrip();
-    const base = trip.scenarios.find(s => s.id === trip.chosenId);
-    const v = await ask("Novo cenário", [
-      { name: "name", label: "Nome", value: `Cenário ${trip.scenarios.length + 1}`, required: true },
-      { name: "copy", label: `Copiar rota e custos de "${base.name}"`, type: "checkbox", value: true }
-    ], { confirm: "Criar" });
-    if (!v) return;
-    const sc = v.copy ? cloneScenario(base, trip) : { id: uid(), segments: [{ id: uid(), city: "Destino", days: trip.days }], costs: [] };
-    sc.name = v.name.trim();
-    trip.scenarios.push(sc);
-    commit();
-  },
-  "sc-dup"(el) {
-    const trip = currentTrip();
-    const src = trip.scenarios.find(s => s.id === el.dataset.sc);
-    const sc = cloneScenario(src, trip);
-    sc.name = `${src.name} (cópia)`;
-    trip.scenarios.push(sc);
-    commit(); toast("Cenário duplicado.");
-  },
-  async "sc-rename"(el) {
-    const trip = currentTrip();
-    const sc = trip.scenarios.find(s => s.id === el.dataset.sc);
-    const v = await ask("Renomear cenário", [{ name: "name", label: "Nome", value: sc.name, required: true }]);
-    if (v) { sc.name = v.name.trim(); commit(); }
-  },
-  async "sc-del"(el) {
-    const trip = currentTrip();
-    const sc = trip.scenarios.find(s => s.id === el.dataset.sc);
-    const ok = await ask("Excluir cenário", [{ name: "x", label: `Excluir "${sc.name}" com rota e custos?`, type: "checkbox", value: false }], { confirm: "Excluir", danger: true });
-    if (!ok?.x) return;
-    trip.scenarios = trip.scenarios.filter(s => s.id !== sc.id);
-    if (trip.chosenId === sc.id) trip.chosenId = trip.scenarios[0].id;
-    if (ui.scenarioId === sc.id) ui.scenarioId = null;
-    commit();
-  },
-  "sc-choose"(el) {
-    const trip = currentTrip();
-    trip.chosenId = el.dataset.sc; ui.scenarioId = null;
-    commit(); toast("Cenário escolhido.");
-  },
-  "sc-view"(el) { ui.scenarioId = el.dataset.sc; render(); },
-  "sc-open-costs"(el) { ui.scenarioId = el.dataset.sc; ui.tab = "custos"; render(); },
-
-  /* trechos */
-  "seg-days"(el) {
-    const seg = findSeg(el);
-    seg.days = Math.max(1, seg.days + Number(el.dataset.d));
-    commit();
-  },
-  "seg-move"(el) {
-    const sc = findSc(el);
-    const i = Number(el.dataset.i), j = i + Number(el.dataset.d);
-    [sc.segments[i], sc.segments[j]] = [sc.segments[j], sc.segments[i]];
-    commit();
-  },
-  async "seg-del"(el) {
-    const sc = findSc(el);
-    const seg = sc.segments[Number(el.dataset.i)];
-    sc.segments.splice(Number(el.dataset.i), 1);
-    sc.costs.forEach(c => { if (c.segId === seg.id) c.segId = ""; });
-    commit();
-  },
-  async "seg-edit"(el) {
-    const seg = findSeg(el);
-    const v = await ask("Trecho da rota", [
-      { name: "city", label: "Destino", value: seg.city, required: true },
-      { name: "days", label: "Dias", type: "number", value: seg.days, min: 1 }
-    ]);
-    if (v) { seg.city = v.city.trim(); seg.days = Math.max(1, Number(v.days) || 1); commit(); }
-  },
-  async "seg-add"(el) {
-    const sc = findSc(el);
-    const v = await ask("Novo destino", [
-      { name: "city", label: "Destino", required: true, placeholder: "Ex.: Paris" },
-      { name: "days", label: "Dias", type: "number", value: 3, min: 1 }
-    ], { confirm: "Adicionar" });
-    if (v) { sc.segments.push({ id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) }); commit(); }
-  },
-  "seg-add-transit"(el) {
-    const sc = findSc(el);
-    sc.segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true });
-    commit();
-  },
-
-  /* custos */
-  async "cost-add"(el) { await editCost(findSc(el), null); },
-  async "cost-edit"(el) {
-    const sc = findSc(el);
-    await editCost(sc, sc.costs.find(c => c.id === el.dataset.id));
-  },
-
-  /* roteiro */
-  async "act-add"(el) { await editActivity(Number(el.dataset.day), null); },
-  async "act-edit"(el) {
-    const day = Number(el.dataset.day);
-    await editActivity(day, (currentTrip().itinerary[day] || []).find(a => a.id === el.dataset.id));
-  },
-
-  /* reservas */
-  async "book-add"() { await editBooking(null); },
-  async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
-  "book-toggle"(el) {
-    const b = currentTrip().bookings.find(x => x.id === el.dataset.id);
-    b.done = !b.done; commit();
-  },
-
-  /* despesas */
-  async "exp-add"() { await editExpense(null); },
-  async "exp-edit"(el) { await editExpense(currentTrip().expenses.find(e => e.id === el.dataset.id)); },
-  "exp-csv"() {
-    const trip = currentTrip();
-    const rows = [["Descrição", "Valor", "Pago por", "Participantes"], ...trip.expenses.map(e => [e.desc, e.amount.toFixed(2).replace(".", ","), e.paidBy, e.participants.join("; ") || "Dividir depois"])];
-    const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\r\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" }));
-    a.download = `${trip.name}-despesas.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+/* ---------- clima ---------- */
+async function fillWeather(trip) {
+  if (!trip.start) return;
+  const days = dayList(trip);
+  const byCity = {};
+  days.forEach((d, i) => { if (!d.transit && d.city && d.city !== "A definir" && document.querySelector(`[data-wx="${i}"]`)) (byCity[d.city] ||= []).push(i); });
+  for (const [city, idxs] of Object.entries(byCity)) {
+    try {
+      const geo = await geocodeCity(city);
+      if (!geo) continue;
+      const w = await cityWeather(geo, dayISO(trip, idxs[0]), dayISO(trip, idxs.at(-1)));
+      idxs.forEach(i => {
+        const info = w[dayISO(trip, i)];
+        document.querySelectorAll(`[data-wx="${i}"]`).forEach(el => {
+          el.innerHTML = info ? `<span>${weatherIcon(info.code, info.rain)} ${Math.round(info.tmin)}° / ${Math.round(info.tmax)}°</span><small>${info.rain != null ? `chuva ${info.rain}%` : ""}${info.hist ? " · média histórica" : ""}</small>` : "";
+        });
+      });
+    } catch { /* sem internet: segue sem clima */ }
   }
-};
+}
 
+/* ---------- renderização geral ---------- */
+function render(keepScroll = false) {
+  const app = document.querySelector("#app");
+  const r = route();
+  const trip = currentTrip();
+  const dest = currentDest();
+  if ((r[0] === "t" && !trip) || (r[0] === "d" && !dest)) { location.hash = "#/"; return; }
+  if (trip && ui.tripId !== trip.id) { ui.tripId = trip.id; ui.tab = activeDayIndex(trip) != null ? "hoje" : "cenarios"; ui.hojeDay = null; ui.mapCity = ""; ui.mapDay = ""; }
+  app.innerHTML = trip ? renderTrip(trip) : dest ? renderDestPage(dest) : renderHome();
+  if (!keepScroll) window.scrollTo(0, 0);
+  updateStatus(getStatus());
+  if (trip) {
+    if (["hoje", "roteiro"].includes(ui.tab)) fillWeather(trip);
+    if (ui.tab === "mapa") initMap(trip);
+  } else if (!dest) {
+    const act = activeTrip();
+    if (act) fillWeather(act);
+  }
+}
+const STATUS_TEXT = { off: "Sem sincronização", syncing: "Sincronizando…", ok: "Sincronizado", error: "Erro ao sincronizar", offline: "Offline" };
+function updateStatus(value) {
+  document.querySelectorAll("[data-sync]").forEach(el => { el.textContent = STATUS_TEXT[value] || ""; el.dataset.state = value; });
+}
+hooks.render = render;
+hooks.status = updateStatus;
+hooks.toast = toast;
+
+/* ---------- editores ---------- */
 const findSc = el => currentTrip().scenarios.find(s => s.id === el.dataset.sc);
 const findSeg = el => findSc(el).segments[Number(el.dataset.i)];
 function cloneScenario(src) {
@@ -655,6 +561,17 @@ function cloneScenario(src) {
   copy.costs.forEach(c => { c.id = uid(); if (c.segId) c.segId = idMap[c.segId] || ""; });
   return copy;
 }
+function money2(raw) {
+  try { return parseMoneyExpression(raw); } catch { toast("Valor ou cálculo inválido."); return null; }
+}
+async function rateFor(cur, typed) {
+  const code = (cur || "BRL").trim().toUpperCase();
+  if (code === "BRL") return { code, rate: 1 };
+  if (typed) { const r = money2(typed); return r ? { code, rate: r } : null; }
+  try { return { code, rate: Math.round((await fxRate(code)) * 10000) / 10000 }; } catch { toast("Sem cotação automática. Informe a cotação em reais."); return null; }
+}
+const dayOptions = trip => ["—", ...dayList(trip).map((d, i) => `Dia ${i + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, i))}` : ""} · ${d.city}`)];
+const dayFromOption = label => (label && label.startsWith("Dia ") ? Number(label.split(" ")[1]) - 1 : null);
 
 async function editCost(sc, cost) {
   const trip = currentTrip();
@@ -663,9 +580,9 @@ async function editCost(sc, cost) {
   const v = await ask(cost ? "Editar custo" : "Novo custo", [
     { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
     { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
-    { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? String(cost.amount).replace(".", ",") : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
-    { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP…" },
-    { name: "rate", label: "Cotação em reais (se não for BRL)", type: "money", value: cost?.rate && cost.rate !== 1 ? String(cost.rate).replace(".", ",") : "", placeholder: "Ex.: 5,40" },
+    { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? num(cost.amount) : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
+    { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
+    { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" },
     { name: "perPerson", label: `Valor é por pessoa (× ${trip.travelers.length})`, type: "checkbox", value: !!cost?.perPerson },
     { name: "where", label: "Vinculado a", type: "select", options: places, value: segName || places[0] },
     { name: "status", label: "Situação", type: "select", options: COST_STATUS, value: cost?.status || "Estimado" },
@@ -676,14 +593,10 @@ async function editCost(sc, cost) {
   if (v.del) { sc.costs = sc.costs.filter(c => c.id !== cost.id); commit(); return; }
   const amount = money2(v.amount);
   if (amount == null) return;
-  const cur = (v.cur || "BRL").trim().toUpperCase();
-  let rate = 1;
-  if (cur !== "BRL") {
-    rate = v.rate ? money2(v.rate) : null;
-    if (!rate) { toast("Informe a cotação em reais."); return; }
-  }
+  const fx = await rateFor(v.cur, v.rate);
+  if (!fx) return;
   const seg = sc.segments.find(s => s.city === v.where);
-  const data = { desc: v.desc.trim(), cat: v.cat, amount, cur, rate, perPerson: v.perPerson, segId: seg?.id || "", status: v.status, refundable: v.refundable };
+  const data = { desc: v.desc.trim(), cat: v.cat, amount, cur: fx.code, rate: fx.rate, perPerson: v.perPerson, segId: seg?.id || "", status: v.status, refundable: v.refundable };
   if (cost) Object.assign(cost, data); else sc.costs.push({ id: uid(), ...data });
   commit();
 }
@@ -693,7 +606,7 @@ async function editActivity(day, act) {
   const v = await ask(act ? "Editar atividade" : `Nova atividade · Dia ${day + 1}`, [
     { name: "time", label: "Horário", type: "time", value: act?.time },
     { name: "title", label: "Atividade", value: act?.title, required: true, placeholder: "Ex.: Torre Eiffel" },
-    { name: "cost", label: "Valor previsto (opcional)", type: "money", value: act?.cost ? String(act.cost).replace(".", ",") : "" },
+    { name: "cost", label: "Valor previsto em reais (opcional)", type: "money", value: act?.cost ? num(act.cost) : "" },
     { name: "note", label: "Endereço, link ou observações", type: "textarea", value: act?.note },
     ...(act ? [{ name: "del", label: "Excluir esta atividade", type: "checkbox", value: false }] : [])
   ]);
@@ -710,64 +623,582 @@ async function editActivity(day, act) {
 async function editBooking(b) {
   const trip = currentTrip();
   const v = await ask(b ? "Editar reserva" : "Nova reserva", [
-    { name: "desc", label: "Descrição", value: b?.desc, required: true, placeholder: "Ex.: Voo GRU → CDG" },
-    { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || "Voo" },
+    { name: "desc", label: "Descrição", value: b?.desc, required: true, placeholder: "Ex.: Hotel Marais" },
+    { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || "Hotel" },
+    { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date },
+    { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
-    { name: "deadline", label: "Prazo (pagamento ou cancelamento)", type: "date", value: b?.deadline },
+    { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
+    { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
+    { name: "freeCancelUntil", label: "Cancelamento grátis até", type: "date", value: b?.freeCancelUntil },
+    { name: "cancelPolicy", label: "Condições de cancelamento", type: "textarea", value: b?.cancelPolicy, placeholder: "Ex.: grátis até 48 h antes; depois, 1ª diária" },
+    { name: "changePolicy", label: "Remarcação / alteração", type: "textarea", value: b?.changePolicy, placeholder: "Ex.: remarcação com taxa de 10%" },
+    { name: "deadline", label: "Prazo de pagamento", type: "date", value: b?.deadline },
     ...(b ? [{ name: "del", label: "Excluir esta reserva", type: "checkbox", value: false }] : [])
   ]);
   if (!v) return;
   if (v.del) { trip.bookings = trip.bookings.filter(x => x.id !== b.id); commit(); return; }
-  const data = { desc: v.desc.trim(), type: v.type, locator: v.locator.trim(), deadline: v.deadline };
+  const data = {
+    desc: v.desc.trim(), type: v.type, date: v.date, dateEnd: v.dateEnd, locator: v.locator.trim(), link: v.link.trim(),
+    attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: v.changePolicy.trim(), deadline: v.deadline
+  };
   if (b) Object.assign(b, data); else trip.bookings.push({ id: uid(), done: false, ...data });
   commit();
 }
 
-async function editExpense(e) {
-  const trip = currentTrip();
-  const v = await ask(e ? "Editar despesa" : "Nova despesa", [
-    { name: "desc", label: "Descrição", value: e?.desc, required: true, placeholder: "Ex.: Hotel Paris" },
-    { name: "amount", label: "Valor ou cálculo", type: "money", value: e ? String(e.amount).replace(".", ",") : "", required: true, placeholder: "Ex.: 2.400" },
-    { name: "paidBy", label: "Pago por", type: "select", options: trip.travelers, value: e?.paidBy || trip.travelers[0] },
-    { name: "participants", label: "Dividir entre", type: "checks", options: trip.travelers, value: e ? e.participants : trip.travelers },
-    { name: "later", label: "Registrar agora e dividir depois", type: "checkbox", value: e ? !e.participants.length : false },
+async function editExpense(e, trip) {
+  const names = trip.travelers;
+  const mode0 = e ? (e.shares ? "Valores individuais" : !e.participants.length ? "Dividir depois" : e.participants.length === 1 && e.participants[0] === e.paidBy && names.length > 1 ? "Só eu" : "Dividir igual") : (names.length > 1 ? "Dividir igual" : "Só eu");
+  const v = await ask(e ? "Editar despesa" : "Lançar despesa", [
+    { name: "desc", label: "O que foi", value: e?.desc, required: true, placeholder: "Ex.: Jantar no Marais" },
+    { name: "amount", label: "Valor ou cálculo", type: "money", value: e ? num(e.orig ?? e.amount) : "", placeholder: "Ex.: 85,50 ou 2.400 ÷ 4" },
+    { name: "cur", label: "Moeda", value: e?.cur || "BRL", hint: "Em moeda estrangeira, o valor em reais é calculado pela cotação do dia." },
+    { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: e?.cur && e.cur !== "BRL" ? num(e.rate) : "" },
+    { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: e?.cat || "Alimentação" },
+    { name: "paidBy", label: "Quem pagou", type: "select", options: names, value: e?.paidBy || names[0] },
+    { name: "split", label: "Divisão", type: "select", options: ["Dividir igual", "Só eu", "Valores individuais", "Dividir depois"], value: mode0 },
+    { name: "participants", label: "Dividir entre", type: "checks", options: names, value: e?.participants?.length ? e.participants : names, showIf: ["split", "Dividir igual"] },
+    { name: "_n", type: "note", label: "Informe quanto cada pessoa deve. O total é a soma.", showIf: ["split", "Valores individuais"] },
+    ...names.map((n, i) => ({ name: `share${i}`, label: n, type: "money", value: e?.shares?.[n] != null ? num(e.shares[n] / (e.rate || 1)) : "", showIf: ["split", "Valores individuais"] })),
+    { name: "tip", label: "Gorjeta (%) — opcional", type: "number", value: e?.tipPct || "", min: 0, step: "0.5" },
+    { name: "card", label: "Paguei no cartão de crédito", type: "checkbox", value: !!e?.card },
+    { name: "cardName", label: "Qual cartão (opcional)", value: e?.cardName },
+    { name: "date", label: "Data", type: "date", value: e?.date || todayISO() },
     ...(e ? [{ name: "del", label: "Excluir esta despesa", type: "checkbox", value: false }] : [])
-  ]);
+  ], { confirm: e ? "Salvar" : "Lançar" });
   if (!v) return;
   if (v.del) { trip.expenses = trip.expenses.filter(x => x.id !== e.id); commit(); return; }
-  const amount = money2(v.amount);
-  if (amount == null) return;
-  const participants = v.later ? [] : v.participants;
-  if (!v.later && !participants.length) { toast("Escolha ao menos um viajante."); return; }
-  const data = { desc: v.desc.trim(), amount, paidBy: v.paidBy, participants };
+  const fx = await rateFor(v.cur, v.rate);
+  if (!fx) return;
+  let orig, shares = null, participants = [];
+  if (v.split === "Valores individuais") {
+    shares = {};
+    let sum = 0;
+    for (let i = 0; i < names.length; i += 1) {
+      const raw = v[`share${i}`];
+      if (!raw) continue;
+      const n = money2(raw);
+      if (n == null) return;
+      shares[names[i]] = Math.round(n * fx.rate * 100) / 100;
+      sum += n;
+    }
+    if (!sum) { toast("Informe ao menos um valor individual."); return; }
+    orig = sum;
+  } else {
+    orig = money2(v.amount);
+    if (orig == null) return;
+    if (v.split === "Só eu") participants = [v.paidBy];
+    else if (v.split === "Dividir igual") {
+      participants = v.participants;
+      if (!participants.length) { toast("Escolha ao menos um viajante."); return; }
+    }
+  }
+  const data = {
+    desc: v.desc.trim(), orig, cur: fx.code, rate: fx.rate, amount: Math.round(orig * fx.rate * 100) / 100,
+    cat: v.cat, paidBy: v.paidBy, participants, shares, tipPct: Number(v.tip) || 0, card: v.card, cardName: v.cardName.trim(), date: v.date
+  };
   if (e) Object.assign(e, data); else trip.expenses.push({ id: uid(), ...data });
+  commit();
+  toast("Despesa lançada.");
+}
+
+async function editPlace(p) {
+  const trip = currentTrip();
+  const cities = [...new Set(chosenScenario(trip).segments.filter(s => !s.transit).map(s => s.city))];
+  const opts = dayOptions(trip);
+  const v = await ask("Local", [
+    { name: "name", label: "Nome", value: p.name, required: true },
+    { name: "city", label: "Cidade", type: "select", options: cities.length ? cities : [p.city || "—"], value: p.city },
+    { name: "day", label: "Visitar no dia", type: "select", options: opts, value: p.day != null ? opts[p.day + 1] : "—" },
+    { name: "visited", label: "Já visitei", type: "checkbox", value: !!p.visited },
+    { name: "del", label: "Excluir este local", type: "checkbox", value: false }
+  ]);
+  if (!v) return;
+  const trip2 = currentTrip();
+  if (v.del) { trip2.places = trip2.places.filter(x => x.id !== p.id); commit(); return; }
+  Object.assign(p, { name: v.name.trim(), city: v.city, day: dayFromOption(v.day), visited: v.visited });
+  commit();
+}
+async function addPlace() {
+  const trip = currentTrip();
+  const cities = [...new Set(chosenScenario(trip).segments.filter(s => !s.transit).map(s => s.city))];
+  const q = await ask("Buscar local", [
+    { name: "query", label: "Nome do lugar", required: true, placeholder: "Ex.: Torre Eiffel" },
+    { name: "city", label: "Cidade", type: "select", options: cities.length ? cities : ["—"], value: ui.mapCity || cities[0] }
+  ], { confirm: "Buscar" });
+  if (!q) return;
+  let results = [];
+  try { results = await searchPlaces(q.query, q.city === "—" ? "" : q.city); } catch { toast("Não consegui buscar. Verifique a internet."); return; }
+  if (!results.length) { toast("Nada encontrado. Tente outro nome."); return; }
+  const labels = results.map((r, i) => `${i + 1}. ${r.name} — ${r.label.split(",").slice(1, 3).join(",").trim()}`);
+  const pick = await ask("Escolha o local", [{ name: "r", label: "Resultados", type: "select", options: labels, value: labels[0] }], { confirm: "Colocar pin" });
+  if (!pick) return;
+  const r = results[labels.indexOf(pick.r)];
+  currentTrip().places.push({ id: uid(), name: r.name, city: q.city === "—" ? "" : q.city, lat: r.lat, lon: r.lon, day: ui.mapDay !== "" ? Number(ui.mapDay) : null, visited: false });
   commit();
 }
 
+/* destino / contatos */
+async function editDest(d) {
+  const v = await ask(d ? "Editar destino" : "Novo destino", [
+    { name: "name", label: "Destino", value: d?.name, required: true, placeholder: "Ex.: Paris" },
+    { name: "country", label: "País", value: d?.country },
+    ...(d ? [{ name: "del", label: "Excluir este destino", type: "checkbox", value: false }] : [])
+  ]);
+  if (!v) return;
+  if (v.del) { removeItem("destinations", d.id); location.hash = "#/"; return; }
+  if (d) Object.assign(d, { name: v.name.trim(), country: v.country.trim() });
+  else {
+    const nd = { id: uid(), name: v.name.trim(), country: v.country.trim(), repeat: false, attractions: [], food: [] };
+    state.destinations.push(nd);
+    save();
+    location.hash = `#/d/${nd.id}`;
+    return;
+  }
+  commit();
+}
+async function editContact(c, destId) {
+  const v = await ask(c ? "Editar contato" : "Novo contato", [
+    { name: "name", label: "Nome (guia, agência…)", value: c?.name, required: true },
+    { name: "phone", label: "Telefone / WhatsApp", value: c?.phone },
+    { name: "instagram", label: "Instagram", value: c?.instagram, placeholder: "@perfil" },
+    { name: "note", label: "Observação", value: c?.note },
+    ...(c ? [{ name: "del", label: "Excluir este contato", type: "checkbox", value: false }] : [])
+  ]);
+  if (!v) return;
+  if (v.del) { removeItem("contacts", c.id); render(true); return; }
+  const data = { name: v.name.trim(), phone: v.phone.trim(), instagram: v.instagram.trim(), note: v.note.trim() };
+  if (c) Object.assign(c, data); else state.contacts.push({ id: uid(), destId: destId || "", ...data });
+  commit(true);
+}
+
+/* ---------- ações ---------- */
+function newTripObject({ name, days, travelers, start }) {
+  const scenario = { id: uid(), name: "Cenário 1", segments: [{ id: uid(), city: "Destino", days }], costs: [] };
+  return normalizeTrip({ id: uid(), name, days, start: start || "", travelers, status: "rascunho", scenarios: [scenario], chosenId: scenario.id });
+}
+const parseNames = text => { const n = String(text || "").split(",").map(s => s.trim()).filter(Boolean); return n.length ? n : ["Eu"]; };
+const tripForAction = el => state.trips.find(t => t.id === el?.dataset?.trip) || currentTrip() || activeTrip();
+const placeById = id => currentTrip().places.find(p => p.id === id);
+const destById = id => state.destinations.find(d => d.id === id);
+
+const actions = {
+  /* viagens */
+  async "new-trip"() {
+    const v = await ask("Nova viagem", [
+      { name: "name", label: "Nome", required: true, placeholder: "Ex.: Europa 2027" },
+      { name: "days", label: "Duração (dias)", type: "number", value: 15, min: 1, required: true },
+      { name: "start", label: "Data de saída (opcional)", type: "date" },
+      { name: "travelers", label: "Viajantes", value: "Eu", hint: "Separe por vírgula. Ex.: Eduardo, Ana", required: true }
+    ], { confirm: "Criar rascunho" });
+    if (!v) return;
+    const trip = newTripObject({ name: v.name.trim(), days: Math.max(1, Number(v.days)), travelers: parseNames(v.travelers), start: v.start });
+    state.trips.push(trip);
+    ui.tripId = null; ui.scenarioId = null;
+    save();
+    location.hash = `#/t/${trip.id}`;
+  },
+  async "new-wish"() {
+    const v = await ask("Nova viagem desejada", [
+      { name: "name", label: "Para onde?", required: true, placeholder: "Ex.: Japão" },
+      { name: "days", label: "Quantos dias (aproximado)", type: "number", value: 10, min: 1 },
+      { name: "travelers", label: "Viajantes", value: "Eu" }
+    ], { confirm: "Salvar desejo" });
+    if (!v) return;
+    const trip = newTripObject({ name: v.name.trim(), days: Math.max(1, Number(v.days) || 7), travelers: parseNames(v.travelers), start: "" });
+    trip.status = "desejo";
+    state.trips.push(trip);
+    commit();
+  },
+  async "new-past"() {
+    const v = await ask("Registrar viagem passada", [
+      { name: "name", label: "Nome da viagem", required: true, placeholder: "Ex.: Tailândia 2020" },
+      { name: "country", label: "País", placeholder: "Ex.: Tailândia" },
+      { name: "destName", label: "Destino principal", placeholder: "Ex.: Bangkok" },
+      { name: "start", label: "Data de saída (aproximada)", type: "date" },
+      { name: "days", label: "Dias", type: "number", value: 10, min: 1 },
+      { name: "travelers", label: "Viajantes", value: "Eu" },
+      { name: "total", label: "Custo total em reais (se não detalhar abaixo)", type: "money" },
+      { name: "_n", type: "note", label: "Ou detalhe por categoria (opcional):" },
+      ...CATEGORIES.map((c, i) => ({ name: `c${i}`, label: c, type: "money" })),
+      { name: "wouldRepeat", label: "Repetiria este destino", type: "checkbox", value: false }
+    ], { confirm: "Registrar" });
+    if (!v) return;
+    const trip = newTripObject({ name: v.name.trim(), days: Math.max(1, Number(v.days) || 1), travelers: parseNames(v.travelers), start: v.start });
+    trip.status = "concluida";
+    trip.country = v.country.trim();
+    trip.destName = v.destName.trim();
+    trip.wouldRepeat = v.wouldRepeat;
+    chosenScenario(trip).segments[0].city = trip.destName || trip.name;
+    const byCat = {};
+    for (let i = 0; i < CATEGORIES.length; i += 1) {
+      if (!v[`c${i}`]) continue;
+      const n = money2(v[`c${i}`]);
+      if (n == null) return;
+      byCat[CATEGORIES[i]] = n;
+    }
+    if (!Object.keys(byCat).length && v.total) {
+      const t = money2(v.total);
+      if (t == null) return;
+      byCat.Outros = t;
+    }
+    trip.pastCosts = byCat;
+    state.trips.push(trip);
+    ui.home = "historico";
+    commit();
+  },
+  async "trip-menu"() {
+    const trip = currentTrip();
+    const v = await ask("Opções da viagem", [
+      { name: "name", label: "Nome", value: trip.name, required: true },
+      { name: "country", label: "País", value: trip.country },
+      { name: "destName", label: "Destino principal", value: trip.destName, hint: "Liga a viagem ao banco de destinos e às estatísticas." },
+      { name: "days", label: "Duração (dias)", type: "number", value: trip.days, min: 1 },
+      { name: "start", label: "Data de saída", type: "date", value: trip.start },
+      { name: "travelers", label: "Viajantes", value: trip.travelers.join(", ") },
+      { name: "status", label: "Situação", type: "select", options: Object.values(TRIP_STATUS), value: TRIP_STATUS[trip.status] },
+      { name: "wouldRepeat", label: "Repetiria este destino", type: "checkbox", value: !!trip.wouldRepeat },
+      { name: "del", label: "Excluir esta viagem", type: "checkbox", value: false }
+    ]);
+    if (!v) return;
+    if (v.del) { removeItem("trips", trip.id); location.hash = "#/"; return; }
+    Object.assign(trip, {
+      name: v.name.trim() || trip.name, country: v.country.trim(), destName: v.destName.trim(),
+      days: Math.max(1, Number(v.days) || trip.days), start: v.start, travelers: parseNames(v.travelers),
+      status: statusKey(v.status) || trip.status, wouldRepeat: v.wouldRepeat
+    });
+    commit();
+  },
+  backup() {
+    const blob = new Blob([JSON.stringify({ trips: state.trips, destinations: state.destinations, contacts: state.contacts, deleted: state.deleted, checklistTemplate: state.checklistTemplate }, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `viagens-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  restore() { document.querySelector("#restoreFile").click(); },
+  async "sync-setup"() {
+    const v = await ask("Sincronização", [
+      { name: "token", label: "Token de acesso do GitHub", value: syncToken(), placeholder: "github_pat_…", hint: "Use o mesmo token em cada aparelho. Ele fica guardado só neste aparelho. Deixe vazio para desligar." }
+    ], { confirm: "Salvar e sincronizar" });
+    if (!v) return;
+    try { setSyncToken(v.token.trim()); } catch { toast("Não consegui guardar o token."); return; }
+    if (!v.token.trim()) { updateStatus("off"); return; }
+    save();
+    await sync();
+    toast(getStatus() === "ok" ? "Sincronizado." : "Não consegui sincronizar. Confira o token.");
+  },
+
+  /* cenários */
+  async "sc-new"() {
+    const trip = currentTrip();
+    const base = chosenScenario(trip);
+    const v = await ask("Novo cenário", [
+      { name: "name", label: "Nome", value: `Cenário ${trip.scenarios.length + 1}`, required: true },
+      { name: "copy", label: `Copiar rota e custos de "${base.name}"`, type: "checkbox", value: true }
+    ], { confirm: "Criar" });
+    if (!v) return;
+    const sc = v.copy ? cloneScenario(base) : { id: uid(), segments: [{ id: uid(), city: "Destino", days: trip.days }], costs: [] };
+    sc.name = v.name.trim();
+    trip.scenarios.push(sc);
+    commit();
+  },
+  "sc-dup"(el) {
+    const trip = currentTrip();
+    const src = trip.scenarios.find(s => s.id === el.dataset.sc);
+    const sc = cloneScenario(src);
+    sc.name = `${src.name} (cópia)`;
+    trip.scenarios.push(sc);
+    commit(); toast("Cenário duplicado.");
+  },
+  async "sc-rename"(el) {
+    const sc = findSc(el);
+    const v = await ask("Renomear cenário", [{ name: "name", label: "Nome", value: sc.name, required: true }]);
+    if (v) { sc.name = v.name.trim(); commit(); }
+  },
+  async "sc-del"(el) {
+    const trip = currentTrip();
+    const sc = findSc(el);
+    const ok = await ask("Excluir cenário", [{ name: "x", label: `Excluir "${sc.name}" com rota e custos?`, type: "checkbox", value: false }], { confirm: "Excluir", danger: true });
+    if (!ok?.x) return;
+    trip.scenarios = trip.scenarios.filter(s => s.id !== sc.id);
+    if (trip.chosenId === sc.id) trip.chosenId = trip.scenarios[0].id;
+    if (ui.scenarioId === sc.id) ui.scenarioId = null;
+    commit();
+  },
+  "sc-choose"(el) { currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
+  "sc-view"(el) { ui.scenarioId = el.dataset.sc; render(); },
+  "sc-open-costs"(el) { ui.scenarioId = el.dataset.sc; ui.tab = "custos"; render(); },
+  "seg-days"(el) { const seg = findSeg(el); seg.days = Math.max(1, seg.days + Number(el.dataset.d)); commit(true); },
+  "seg-move"(el) {
+    const sc = findSc(el);
+    const i = Number(el.dataset.i), j = i + Number(el.dataset.d);
+    [sc.segments[i], sc.segments[j]] = [sc.segments[j], sc.segments[i]];
+    commit(true);
+  },
+  "seg-del"(el) {
+    const sc = findSc(el);
+    const seg = sc.segments[Number(el.dataset.i)];
+    sc.segments.splice(Number(el.dataset.i), 1);
+    sc.costs.forEach(c => { if (c.segId === seg.id) c.segId = ""; });
+    commit(true);
+  },
+  async "seg-edit"(el) {
+    const seg = findSeg(el);
+    const v = await ask("Trecho da rota", [
+      { name: "city", label: "Destino", value: seg.city, required: true },
+      { name: "days", label: "Dias", type: "number", value: seg.days, min: 1 }
+    ]);
+    if (v) { seg.city = v.city.trim(); seg.days = Math.max(1, Number(v.days) || 1); commit(true); }
+  },
+  async "seg-add"(el) {
+    const sc = findSc(el);
+    const v = await ask("Novo destino", [
+      { name: "city", label: "Destino", required: true, placeholder: "Ex.: Paris" },
+      { name: "days", label: "Dias", type: "number", value: 3, min: 1 }
+    ], { confirm: "Adicionar" });
+    if (v) { sc.segments.push({ id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) }); commit(true); }
+  },
+  "seg-add-transit"(el) { findSc(el).segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true }); commit(true); },
+
+  /* custos, roteiro, reservas */
+  async "cost-add"(el) { await editCost(findSc(el), null); },
+  async "cost-edit"(el) { const sc = findSc(el); await editCost(sc, sc.costs.find(c => c.id === el.dataset.id)); },
+  async "act-add"(el) { await editActivity(Number(el.dataset.day), null); },
+  async "act-edit"(el) {
+    const day = Number(el.dataset.day);
+    await editActivity(day, (currentTrip().itinerary[day] || []).find(a => a.id === el.dataset.id));
+  },
+  "hoje-nav"(el) {
+    const trip = currentTrip();
+    const cur = ui.hojeDay ?? activeDayIndex(trip) ?? 0;
+    ui.hojeDay = Math.min(trip.days - 1, Math.max(0, cur + Number(el.dataset.d)));
+    render(true);
+  },
+  async "book-add"() { await editBooking(null); },
+  async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
+  "book-toggle"(el) { const b = currentTrip().bookings.find(x => x.id === el.dataset.id); b.done = !b.done; commit(true); },
+  async "open-file"(el) {
+    toast("Abrindo…");
+    const att = { id: el.dataset.id, name: el.dataset.name, type: el.dataset.type };
+    const blob = await getFileBlob(att);
+    if (!blob) { toast("Arquivo ainda não está neste aparelho. Conecte-se para baixar."); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  },
+
+  /* despesas */
+  async "exp-add"() { await editExpense(null, currentTrip()); },
+  async "exp-quick"(el) {
+    const trip = tripForAction(el);
+    if (!trip) { toast("Crie uma viagem primeiro."); return; }
+    await editExpense(null, trip);
+  },
+  async "exp-edit"(el) { const t = currentTrip(); await editExpense(t.expenses.find(e => e.id === el.dataset.id), t); },
+  "exp-csv"() {
+    const trip = currentTrip();
+    const rows = [["Data", "Descrição", "Categoria", "Valor (R$)", "Moeda", "Valor original", "Gorjeta %", "Pago por", "Cartão", "Participantes"], ...trip.expenses.map(e => [e.date || "", e.desc, e.cat || "", expenseTotal(e).toFixed(2).replace(".", ","), e.cur || "BRL", String(e.orig ?? e.amount).replace(".", ","), e.tipPct || 0, e.paidBy, e.card ? "sim" : "", e.shares ? Object.keys(e.shares).join("; ") : e.participants.join("; ") || "Dividir depois"])];
+    const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" }));
+    a.download = `${trip.name}-despesas.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+
+  /* mapa */
+  "map-city"(el) { ui.mapCity = el.dataset.city; render(true); },
+  "map-day"(el) { ui.mapDay = el.dataset.day; ui.mapCity = ""; ui.tab = "mapa"; render(); },
+  async "place-add"() { await addPlace(); },
+  async "place-edit"(el) { await editPlace(placeById(el.dataset.id)); },
+  "place-move"(el) {
+    const trip = currentTrip();
+    const list = mapPlaces(trip);
+    const i = list.findIndex(p => p.id === el.dataset.id);
+    const j = i + Number(el.dataset.d);
+    if (j < 0 || j >= list.length) return;
+    const a = trip.places.indexOf(list[i]), b = trip.places.indexOf(list[j]);
+    [trip.places[a], trip.places[b]] = [trip.places[b], trip.places[a]];
+    commit(true);
+  },
+
+  /* bagagem */
+  "chk-toggle"(el) { const i = currentTrip().checklist.find(c => c.id === el.dataset.id); i.done = !i.done; commit(true); },
+  async "chk-add"() {
+    const trip = currentTrip();
+    const groups = [...new Set(trip.checklist.map(i => i.group || "Outros")), "Outros"];
+    const v = await ask("Novo item", [
+      { name: "text", label: "Item", required: true },
+      { name: "group", label: "Grupo", type: "select", options: [...new Set(groups)], value: groups[0] }
+    ], { confirm: "Adicionar" });
+    if (v) { trip.checklist.push({ id: uid(), group: v.group, text: v.text.trim(), done: false }); commit(true); }
+  },
+  async "chk-edit"(el) {
+    const trip = currentTrip();
+    const item = trip.checklist.find(c => c.id === el.dataset.id);
+    const v = await ask("Editar item", [
+      { name: "text", label: "Item", value: item.text, required: true },
+      { name: "group", label: "Grupo", value: item.group },
+      { name: "del", label: "Excluir este item", type: "checkbox", value: false }
+    ]);
+    if (!v) return;
+    if (v.del) trip.checklist = trip.checklist.filter(c => c.id !== item.id);
+    else Object.assign(item, { text: v.text.trim(), group: v.group.trim() || "Outros" });
+    commit(true);
+  },
+  "chk-reset"() { currentTrip().checklist.forEach(c => { c.done = false; }); commit(true); },
+  "chk-save-template"() {
+    setTemplate(currentTrip().checklist.map(c => ({ group: c.group, text: c.text })));
+    toast("Lista padrão atualizada. Novas viagens vão usá-la.");
+  },
+  "chk-load-template"() {
+    const trip = currentTrip();
+    const have = new Set(trip.checklist.map(c => c.text.toLowerCase()));
+    state.checklistTemplate.filter(t => !have.has(t.text.toLowerCase())).forEach(t => trip.checklist.push({ id: uid(), group: t.group, text: t.text, done: false }));
+    commit(true);
+  },
+
+  /* destinos */
+  async "dest-add"() { await editDest(null); },
+  async "dest-menu"(el) { await editDest(destById(el.dataset.id)); },
+  "dest-repeat"(el) { destById(el.dataset.id).repeat = el.checked; save(); },
+  async "dest-edit-summary"(el) {
+    const d = destById(el.dataset.id);
+    const v = await ask("Resumo do destino", [
+      { name: "pros", label: "Pontos fortes", type: "textarea", value: d.pros },
+      { name: "cons", label: "Pontos fracos", type: "textarea", value: d.cons },
+      { name: "perrengues", label: "Perrengues", type: "textarea", value: d.perrengues }
+    ]);
+    if (v) { Object.assign(d, { pros: v.pros.trim(), cons: v.cons.trim(), perrengues: v.perrengues.trim() }); commit(true); }
+  },
+  async "dest-edit-transport"(el) {
+    const d = destById(el.dataset.id);
+    const t = d.transport || {};
+    const v = await ask("Transporte", [
+      { name: "use", label: "O que usar", value: t.use, placeholder: "Ex.: metrô e a pé" },
+      { name: "car", label: "Vale a pena alugar carro?", type: "select", options: ["—", "Sim, vale", "Não vale", "Depende do roteiro"], value: t.car || "—" },
+      { name: "metro", label: "Tem metrô?", type: "select", options: ["—", "Sim", "Não", "Só em parte"], value: t.metro || "—" },
+      { name: "notes", label: "Notas", type: "textarea", value: t.notes }
+    ]);
+    if (v) { d.transport = { use: v.use.trim(), car: v.car === "—" ? "" : v.car, metro: v.metro === "—" ? "" : v.metro, notes: v.notes.trim() }; commit(true); }
+  },
+  async "dest-edit-lodging"(el) {
+    const d = destById(el.dataset.id);
+    const l = d.lodging || {};
+    const v = await ask("Hospedagem", [
+      { name: "range", label: "Faixa de preço", type: "select", options: ["—", "$", "$$", "$$$"], value: l.range || "—" },
+      { name: "options", label: "Quantidade de opções", value: l.options, placeholder: "Ex.: poucas, muitas, ~50" },
+      { name: "notes", label: "Notas (bairros, dicas)", type: "textarea", value: l.notes }
+    ]);
+    if (v) { d.lodging = { range: v.range === "—" ? "" : v.range, options: v.options.trim(), notes: v.notes.trim() }; commit(true); }
+  },
+  async "dest-edit-visa"(el) {
+    const d = destById(el.dataset.id);
+    const s = d.visa || {};
+    const v = await ask("Visto", [
+      { name: "needed", label: "Precisa de visto?", type: "select", options: ["—", "Sim", "Não", "Depende"], value: s.needed || "—" },
+      { name: "requirements", label: "Requisitos", type: "textarea", value: s.requirements }
+    ]);
+    if (v) { d.visa = { needed: v.needed === "—" ? "" : v.needed, requirements: v.requirements.trim() }; commit(true); }
+  },
+  async "attr-add"(el) {
+    const d = destById(el.dataset.id);
+    const v = await ask("Novo ponto turístico", [{ name: "name", label: "Nome", required: true }], { confirm: "Adicionar" });
+    if (v) { (d.attractions ||= []).push({ id: uid(), name: v.name.trim(), visited: false }); commit(true); }
+  },
+  "attr-toggle"(el) { const a = destById(el.dataset.id).attractions.find(x => x.id === el.dataset.a); a.visited = !a.visited; commit(true); },
+  async "attr-edit"(el) {
+    const d = destById(el.dataset.id);
+    const a = d.attractions.find(x => x.id === el.dataset.a);
+    const v = await ask("Ponto turístico", [{ name: "name", label: "Nome", value: a.name, required: true }, { name: "del", label: "Excluir", type: "checkbox", value: false }]);
+    if (!v) return;
+    if (v.del) d.attractions = d.attractions.filter(x => x.id !== a.id); else a.name = v.name.trim();
+    commit(true);
+  },
+  async "food-add"(el) {
+    const d = destById(el.dataset.id);
+    const v = await ask("Novo lugar para comer", [{ name: "name", label: "Nome", required: true }, { name: "note", label: "Observação", type: "textarea" }], { confirm: "Adicionar" });
+    if (v) { (d.food ||= []).push({ id: uid(), name: v.name.trim(), note: v.note.trim() }); commit(true); }
+  },
+  async "food-edit"(el) {
+    const d = destById(el.dataset.id);
+    const f = d.food.find(x => x.id === el.dataset.a);
+    const v = await ask("Lugar para comer", [{ name: "name", label: "Nome", value: f.name, required: true }, { name: "note", label: "Observação", type: "textarea", value: f.note }, { name: "del", label: "Excluir", type: "checkbox", value: false }]);
+    if (!v) return;
+    if (v.del) d.food = d.food.filter(x => x.id !== f.id); else Object.assign(f, { name: v.name.trim(), note: v.note.trim() });
+    commit(true);
+  },
+  async "contact-add"(el) { await editContact(null, el.dataset.dest); },
+  async "contact-edit"(el) { await editContact(state.contacts.find(c => c.id === el.dataset.id)); }
+};
+
 /* ---------- eventos ---------- */
 document.addEventListener("click", event => {
+  const open = event.target.closest("[data-open-hoje]");
+  if (open) { const t = state.trips.find(x => x.id === open.dataset.openHoje); ui.tripId = t.id; ui.tab = "hoje"; ui.hojeDay = null; return; }
+  const goto = event.target.closest("[data-goto-tab]");
+  if (goto) { ui.tripId = goto.getAttribute("href").split("/").pop(); ui.tab = goto.dataset.gotoTab; return; }
+  const home = event.target.closest("[data-home]");
+  if (home) { ui.home = home.dataset.home; render(); return; }
   const tab = event.target.closest("[data-tab]");
   if (tab) { ui.tab = tab.dataset.tab; render(); return; }
   const el = event.target.closest("[data-act]");
-  if (el && actions[el.dataset.act]) actions[el.dataset.act](el);
+  if (!el || el.tagName === "INPUT") return;
+  if (actions[el.dataset.act]) actions[el.dataset.act](el);
 });
 document.addEventListener("change", event => {
-  if (event.target.id !== "restoreFile") return;
-  const file = event.target.files[0];
+  const t = event.target;
+  if (t.matches("input[data-act=dest-repeat]")) { actions["dest-repeat"](t); return; }
+  if (t.id === "mapDaySel") { ui.mapDay = t.value; render(true); return; }
+  if (t.id !== "restoreFile") return;
+  const file = t.files[0];
   if (!file) return;
   file.text().then(text => {
     try {
       const data = JSON.parse(text);
       if (!Array.isArray(data.trips)) throw new Error();
-      data.deleted ||= {};
-      state = data; rememberHashes(); data.trips.forEach(t => { t.updatedAt = Date.now(); }); save(); render(); toast("Backup importado.");
+      replaceAll(data);
+      render();
+      toast("Backup importado.");
     } catch { toast("Arquivo de backup inválido."); }
   });
 });
+/* arrastar e soltar a ordem dos locais (computador) */
+let dragId = null;
+document.addEventListener("dragstart", e => { const row = e.target.closest?.("[data-pid]"); if (row) { dragId = row.dataset.pid; e.dataTransfer.effectAllowed = "move"; } });
+document.addEventListener("dragover", e => { if (dragId && e.target.closest?.("[data-pid]")) e.preventDefault(); });
+document.addEventListener("drop", e => {
+  const row = e.target.closest?.("[data-pid]");
+  if (!dragId || !row || row.dataset.pid === dragId) { dragId = null; return; }
+  e.preventDefault();
+  const trip = currentTrip();
+  const from = trip.places.findIndex(p => p.id === dragId);
+  const [moved] = trip.places.splice(from, 1);
+  const to = trip.places.findIndex(p => p.id === row.dataset.pid);
+  trip.places.splice(to, 0, moved);
+  dragId = null;
+  commit(true);
+});
 window.addEventListener("hashchange", () => { ui.scenarioId = null; render(); });
-
-if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
-render();
-sync();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); });
 window.addEventListener("online", () => sync());
+
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+
+/* abre direto no dia da viagem em andamento */
+(function boot() {
+  const act = activeTrip();
+  const r = route();
+  if (act && (r[0] === "" || r[0] === undefined) && !sessionStorage.getItem("autoOpened")) {
+    try { sessionStorage.setItem("autoOpened", "1"); } catch { /* ignora */ }
+    ui.tripId = act.id; ui.tab = "hoje";
+    location.hash = `#/t/${act.id}`;
+    return;
+  }
+  render();
+})();
+sync();
