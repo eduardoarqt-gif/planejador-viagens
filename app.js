@@ -20,12 +20,103 @@ const ui = { tab: "cenarios", scenarioId: null };
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved?.trips) return saved;
+    if (saved?.trips) { saved.deleted ||= {}; return saved; }
   } catch { /* começa vazio */ }
-  return { trips: [] };
+  return { trips: [], deleted: {} };
+}
+const tripHash = t => JSON.stringify({ ...t, updatedAt: 0 });
+const hashes = {};
+const rememberHashes = () => state.trips.forEach(t => { hashes[t.id] = tripHash(t); });
+rememberHashes();
+function stamp() {
+  for (const t of state.trips) {
+    const h = tripHash(t);
+    if (hashes[t.id] !== h) { t.updatedAt = Date.now(); hashes[t.id] = h; }
+  }
 }
 function save() {
+  stamp();
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { toast("Não consegui salvar neste navegador."); }
+  dirty = true;
+  schedulePush();
+}
+
+/* ---------- sincronização (repositório privado no GitHub) ---------- */
+const SYNC_KEY = "planejador-sync";
+const REPO = "eduardoarqt-gif/viagens-dados";
+const FILE = "data.json";
+let dirty = false, syncStatus = "off", pushTimer = null, running = false;
+const syncToken = () => { try { return JSON.parse(localStorage.getItem(SYNC_KEY))?.token || ""; } catch { return ""; } };
+const STATUS_TEXT = { off: "Sem sincronização", syncing: "Sincronizando…", ok: "Sincronizado", error: "Erro ao sincronizar", offline: "Offline" };
+function setStatus(value) {
+  syncStatus = value;
+  document.querySelectorAll("[data-sync]").forEach(el => { el.textContent = STATUS_TEXT[value]; el.dataset.state = value; });
+}
+const b64decode = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, "")), c => c.charCodeAt(0)));
+const b64encode = text => {
+  let bin = "";
+  new TextEncoder().encode(text).forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+};
+function gh(method, body) {
+  return fetch(`https://api.github.com/repos/${REPO}/contents/${FILE}${method === "GET" ? `?t=${Date.now()}` : ""}`, {
+    method, cache: "no-store",
+    headers: { Authorization: `Bearer ${syncToken()}`, Accept: "application/vnd.github+json" },
+    body: body ? JSON.stringify(body) : undefined
+  });
+}
+function merge(local, remote) {
+  const deleted = { ...(remote.deleted || {}) };
+  for (const [id, ts] of Object.entries(local.deleted || {})) deleted[id] = Math.max(deleted[id] || 0, ts);
+  const byId = new Map();
+  for (const t of [...(remote.trips || []), ...local.trips]) {
+    const cur = byId.get(t.id);
+    if (!cur || (t.updatedAt || 0) >= (cur.updatedAt || 0)) byId.set(t.id, t);
+  }
+  const trips = [...byId.values()].filter(t => (deleted[t.id] || 0) < (t.updatedAt || 0));
+  return { trips, deleted };
+}
+const signature = trips => JSON.stringify((trips || []).map(t => [t.id, t.updatedAt || 0]).sort());
+async function sync(attempt = 0) {
+  if (!syncToken()) { setStatus("off"); return; }
+  if (running) return;
+  running = true;
+  setStatus("syncing");
+  try {
+    const res = await gh("GET");
+    let remote = { trips: [], deleted: {} }, sha;
+    if (res.status === 200) {
+      const json = await res.json();
+      sha = json.sha;
+      try { remote = JSON.parse(b64decode(json.content)); } catch { /* arquivo vazio */ }
+    } else if (res.status !== 404) throw new Error(`GET ${res.status}`);
+    const merged = merge(state, remote);
+    const changedLocal = signature(merged.trips) !== signature(state.trips);
+    if (dirty || res.status === 404 || signature(merged.trips) !== signature(remote.trips)) {
+      const put = await gh("PUT", { message: "sync", content: b64encode(JSON.stringify(merged)), sha });
+      if (put.status === 409 || put.status === 422) {
+        running = false;
+        if (attempt < 2) return sync(attempt + 1);
+        throw new Error("conflito");
+      }
+      if (!put.ok) throw new Error(`PUT ${put.status}`);
+    }
+    dirty = false;
+    if (changedLocal) {
+      state = merged;
+      rememberHashes();
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignora */ }
+      if (!sheet.open) render(true);
+    }
+    setStatus("ok");
+  } catch {
+    setStatus(navigator.onLine ? "error" : "offline");
+  } finally { running = false; }
+}
+function schedulePush() {
+  if (!syncToken()) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => sync(), 1200);
 }
 function commit() { save(); render(); }
 
@@ -128,12 +219,13 @@ function money2(raw) {
 }
 
 /* ---------- renderização ---------- */
-function render() {
+function render(keepScroll = false) {
   const app = document.querySelector("#app");
   const trip = currentTrip();
   if (route()[0] === "t" && !trip) { location.hash = "#/"; return; }
   app.innerHTML = trip ? renderTrip(trip) : renderHome();
-  window.scrollTo(0, 0);
+  if (!keepScroll) window.scrollTo(0, 0);
+  setStatus(syncToken() ? (syncStatus === "off" ? "ok" : syncStatus) : "off");
 }
 
 function renderHome() {
@@ -153,13 +245,14 @@ function renderHome() {
     </a>`;
   }).join("");
   return `<header class="home-head">
-      <div><p class="eyebrow">Planejador</p><h1>Minhas viagens</h1></div>
+      <div><p class="eyebrow">Planejador</p><h1>Minhas viagens</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
       <button class="btn primary" data-act="new-trip">+ Nova viagem</button>
     </header>
     <main class="home">
       ${cards || `<div class="empty big"><div class="empty-art">✈</div><h2>Nenhuma viagem ainda</h2><p>Comece com um rascunho: monte cenários de rota, compare custos e depois confirme a melhor opção.</p><button class="btn primary" data-act="new-trip">Criar primeira viagem</button></div>`}
     </main>
     <footer class="home-foot">
+      <button class="link" data-act="sync-setup">Sincronização</button>
       <button class="link" data-act="backup">Exportar backup</button>
       <button class="link" data-act="restore">Importar backup</button>
       <input type="file" id="restoreFile" accept="application/json" hidden>
@@ -396,7 +489,7 @@ const actions = {
       { name: "del", label: "Excluir esta viagem", type: "checkbox", value: false }
     ]);
     if (!v) return;
-    if (v.del) { state.trips = state.trips.filter(t => t.id !== trip.id); save(); location.hash = "#/"; return; }
+    if (v.del) { state.trips = state.trips.filter(t => t.id !== trip.id); state.deleted[trip.id] = Date.now(); save(); location.hash = "#/"; return; }
     trip.name = v.name.trim() || trip.name;
     trip.days = Math.max(1, Number(v.days) || trip.days);
     trip.start = v.start;
@@ -404,6 +497,18 @@ const actions = {
     if (names.length) trip.travelers = names;
     trip.status = Object.entries(TRIP_STATUS).find(([, label]) => label === v.status)?.[0] || trip.status;
     commit();
+  },
+
+  async "sync-setup"() {
+    const v = await ask("Sincronização", [
+      { name: "token", label: "Token de acesso do GitHub", value: syncToken(), placeholder: "github_pat_…", hint: "Use o mesmo token em cada aparelho. Ele fica guardado só neste aparelho. Deixe vazio para desligar." }
+    ], { confirm: "Salvar e sincronizar" });
+    if (!v) return;
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify({ token: v.token.trim() })); } catch { toast("Não consegui guardar o token."); return; }
+    if (!v.token.trim()) { setStatus("off"); return; }
+    dirty = true;
+    await sync();
+    toast(syncStatus === "ok" ? "Sincronizado." : "Não consegui sincronizar. Confira o token.");
   },
 
   backup() {
@@ -654,7 +759,8 @@ document.addEventListener("change", event => {
     try {
       const data = JSON.parse(text);
       if (!Array.isArray(data.trips)) throw new Error();
-      state = data; save(); render(); toast("Backup importado.");
+      data.deleted ||= {};
+      state = data; rememberHashes(); data.trips.forEach(t => { t.updatedAt = Date.now(); }); save(); render(); toast("Backup importado.");
     } catch { toast("Arquivo de backup inválido."); }
   });
 });
@@ -662,3 +768,6 @@ window.addEventListener("hashchange", () => { ui.scenarioId = null; render(); })
 
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
 render();
+sync();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); });
+window.addEventListener("online", () => sync());

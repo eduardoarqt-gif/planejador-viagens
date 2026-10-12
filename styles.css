@@ -216,3 +216,9 @@ html, body { overflow-x: hidden; }
 .section-head p { flex: 1 1 200px; }
 .kpis > div, .seg, .card, .row > div:first-child { min-width: 0; }
 .kpis strong { font-size: 15px; }
+
+.sync { margin-top: 8px; font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; min-height: 28px; }
+.sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.sync[data-state=ok]::before { background: var(--good); }
+.sync[data-state=error]::before { background: var(--bad); }
+.sync[data-state=syncing]::before { background: var(--warm); }
