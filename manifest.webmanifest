@@ -1,6 +1,6 @@
 {
-  "name": "Planejador de Viagens",
-  "short_name": "Viagens",
+  "name": "Dudoo Trips",
+  "short_name": "Dudoo Trips",
   "description": "Planejamento de roteiros, cenários e custos de viagens.",
   "start_url": "./",
   "display": "standalone",

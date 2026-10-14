@@ -130,7 +130,7 @@ function renderHome() {
   const addLabel = { viagens: "+ Nova viagem", desejos: "+ Desejo", historico: "+ Viagem passada", destinos: "+ Destino" }[ui.home];
   const addAct = { viagens: "new-trip", desejos: "new-wish", historico: "new-past", destinos: "dest-add" }[ui.home];
   return `<header class="home-head">
-      <div><p class="eyebrow">Planejador</p><h1>Viagens</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
+      <div><p class="eyebrow">Dudoo</p><h1>Trips</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
       <button class="btn primary" data-act="${addAct}">${addLabel}</button>
     </header>
     ${activeCard}${deadlines}
