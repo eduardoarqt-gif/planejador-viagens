@@ -6,6 +6,11 @@ import { ask, toast, brl, esc, plural, num } from "./ui.js";
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
 const COST_STATUS = ["Estimado", "Reservado", "Pago"];
+const ITEM_KINDS = [
+  ["✈️ Passagem aérea", { type: "Voo" }], ["🛏️ Hospedagem", { type: "Hotel" }], ["🚗 Aluguel de carro", { type: "Carro" }],
+  ["🚐 Transfer / transporte", { type: "Transfer" }], ["🎟️ Passeio / ingresso", { type: "Ingresso" }], ["🛡️ Seguro viagem", { type: "Seguro" }],
+  ["💰 Outro custo (alimentação, compras, chip…)", null]
+];
 const CHECKIN = ["Ainda não", "Aberto", "Feito"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
 const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
@@ -311,7 +316,7 @@ function tabScenarios(trip) {
         </div>
       </div>`).join("");
     return `<article class="card scenario ${chosen ? "chosen" : ""}">
-      <div class="card-head"><div><h2>${esc(sc.name)}</h2>${note}</div>${chosen ? `<span class="pill chosen">Escolhido</span>` : ""}</div>
+      <div class="card-head"><div><h2>${esc(sc.name)}</h2>${note}</div><div class="head-actions"><button class="btn primary sm" data-act="sc-add-item" data-sc="${sc.id}">+ Item</button>${chosen ? `<span class="pill chosen">Escolhido</span>` : ""}</div></div>
       <div class="routebar" aria-hidden="true">${bar}</div>
       <div class="route-text">${sc.segments.map(s => `${esc(s.city)} <b>${s.days}</b>`).join(" · ")}</div>
       <div class="segs">${rows}</div>
@@ -638,13 +643,13 @@ async function editCost(sc, cost) {
   const free = trip.bookings.filter(b => !sc.costs.some(c => c.bookingId === b.id && c !== cost));
   const bookingOpts = ["— nenhuma —", ...free.map(bookingLabel)];
   const v = await ask(cost ? "Editar custo" : "Novo custo", [
+    { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
     ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Descrição e valor são editados na aba Reservas.` }] : [
       { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
       { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? num(cost.amount) : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
       { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
       { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" }
     ]),
-    { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
     { name: "perPerson", label: `Valor é por pessoa (× ${trip.travelers.length})`, type: "checkbox", value: !!cost?.perPerson },
     { name: "where", label: "Vinculado a", type: "select", options: places, value: segName || places[0] },
     { name: "status", label: "Situação", type: "select", options: COST_STATUS, value: cost?.status || "Estimado" },
@@ -699,10 +704,10 @@ async function editActivity(day, act) {
 
 async function editBooking(b, pre = {}) {
   const trip = currentTrip();
-  const sc = chosenScenario(trip);
+  const sc = pre.sc || chosenScenario(trip);
   const v = await ask(b ? "Editar reserva" : "Nova reserva", [
-    { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
     { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || pre.type || "Hotel" },
+    { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
@@ -1069,6 +1074,15 @@ const actions = {
   "seg-add-transit"(el) { findSc(el).segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true }); commit(true); },
 
   /* custos, roteiro, reservas */
+  async "sc-add-item"(el) {
+    const sc = findSc(el);
+    const v = await ask("Adicionar item", [{ name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] }], { confirm: "Continuar" });
+    if (!v) return;
+    const kind = ITEM_KINDS.find(k => k[0] === v.kind);
+    if (!kind || !kind[1]) { await editCost(sc, null); return; }
+    ui.scenarioId = sc.id;
+    await editBooking(null, { ...kind[1], sc });
+  },
   async "cost-add"(el) { await editCost(findSc(el), null); },
   async "cost-edit"(el) { const sc = findSc(el); await editCost(sc, sc.costs.find(c => c.id === el.dataset.id)); },
   async "act-add"(el) { await editActivity(Number(el.dataset.day), null); },
