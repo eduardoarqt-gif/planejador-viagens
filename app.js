@@ -5,12 +5,13 @@ import { ask, toast, brl, esc, plural, num } from "./ui.js";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
-const COST_STATUS = ["Estimado", "Reservado", "Pago"];
+const COST_STATUS = ["A orçar", "Estimado", "Reservado", "Pago"];
 const ITEM_KINDS = [
   ["✈️ Passagem aérea", { type: "Voo" }], ["🛏️ Hospedagem", { type: "Hotel" }], ["🚗 Aluguel de carro", { type: "Carro" }],
   ["🚐 Transfer / transporte", { type: "Transfer" }], ["🎟️ Passeio / ingresso", { type: "Ingresso" }], ["🛡️ Seguro viagem", { type: "Seguro" }],
   ["💰 Outro custo (alimentação, compras, chip…)", null]
 ];
+const CAT_BOOKING = { Passagens: "Voo", Hospedagem: "Hotel", Transporte: "Carro", Passeios: "Ingresso", Seguro: "Seguro" };
 const CHECKIN = ["Ainda não", "Aberto", "Feito"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
 const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
@@ -48,7 +49,7 @@ function scenarioStats(sc, trip) {
     hotelChanges: Math.max(0, cities.length - 1),
     perPerson: total / Math.max(1, trip.travelers.length),
     perDay: total / Math.max(1, trip.days),
-    committed: sc.costs.filter(c => c.status !== "Estimado").reduce((s, c) => s + costBrl(c, trip), 0)
+    committed: sc.costs.filter(c => c.status !== "Estimado" && c.status !== "A orçar").reduce((s, c) => s + costBrl(c, trip), 0)
   };
 }
 function dayList(trip) {
@@ -370,11 +371,15 @@ function tabCosts(trip, sc) {
         const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
         return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}">
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
-          <div class="row-right"><b>${brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
+          <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
       }).join("")}</section>`;
   }).join("");
+  const REMIND = ["Passagens", "Hospedagem", "Transporte", "Passeios", "Alimentação", "Seguro"];
+  const todo = REMIND.filter(cat => !sc.costs.some(c => c.cat === cat));
+  const quick = todo.length ? `<div class="remind"><small class="muted">Lembrar de orçar (sem valor ainda):</small><div class="chips scroll">${todo.map(cat => `<button class="chip-btn" data-act="cost-quick" data-sc="${sc.id}" data-cat="${cat}">+ ${CAT_ICON[cat]} ${cat}</button>`).join("")}</div></div>` : "";
   return `${picker}
-    <div class="section-head"><p class="muted">Custos de <b>${esc(sc.name)}</b>. Aceita cálculos: <code>2.400 ÷ 4</code> ou <code>180 x 7</code>.</p><button class="btn primary" data-act="cost-add" data-sc="${sc.id}">+ Custo</button></div>
+    <div class="section-head"><p class="muted">Custos de <b>${esc(sc.name)}</b>. Aceita cálculos: <code>2.400 ÷ 4</code> ou <code>180 x 7</code>.</p><button class="btn primary" data-act="sc-add-item" data-sc="${sc.id}">+ Item</button></div>
+    ${quick}
     ${groups || `<div class="empty"><p>Nenhum custo neste cenário ainda.</p></div>`}
     ${sc.costs.length ? `<div class="card total-card"><div><small>Total do cenário</small><strong>${brl(st.total)}</strong></div><div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div><div><small>Por dia</small><strong>${brl(st.perDay)}</strong></div></div>` : ""}`;
 }
@@ -646,7 +651,7 @@ async function editCost(sc, cost) {
     { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
     ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Descrição e valor são editados na aba Reservas.` }] : [
       { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
-      { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? num(cost.amount) : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
+      { name: "amount", label: "Valor ou cálculo (pode deixar vazio: fica \"a orçar\")", type: "money", value: cost?.amount ? num(cost.amount) : "", placeholder: "Ex.: 2.400 ou 180 x 7" },
       { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
       { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" }
     ]),
@@ -654,7 +659,7 @@ async function editCost(sc, cost) {
     { name: "where", label: "Vinculado a", type: "select", options: places, value: segName || places[0] },
     { name: "status", label: "Situação", type: "select", options: COST_STATUS, value: cost?.status || "Estimado" },
     { name: "refundable", label: "Reembolsável", type: "checkbox", value: cost ? cost.refundable !== false : true },
-    ...(linked ? [{ name: "unlink", label: "Desligar da reserva", type: "checkbox", value: false }]
+    ...(linked ? [{ name: "openBook", label: "Editar a reserva (valor, datas, assento…)", type: "checkbox", value: false }, { name: "unlink", label: "Desligar da reserva", type: "checkbox", value: false }]
       : trip.bookings.length ? [{ name: "book", label: "Ligar a uma reserva já cadastrada", type: "select", options: bookingOpts, value: bookingOpts[0], hint: "A reserva passa a ser a fonte do valor e da descrição." }] : []),
     ...(cost ? [{ name: "del", label: "Excluir este custo", type: "checkbox", value: false }] : [])
   ]);
@@ -666,12 +671,15 @@ async function editCost(sc, cost) {
     Object.assign(cost, common);
     if (v.unlink) delete cost.bookingId;
     commit();
+    if (v.openBook && !v.unlink) await editBooking(linked, { sc });
     return;
   }
-  const amount = money2(v.amount);
-  if (amount == null) return;
-  const fx = await rateFor(v.cur, v.rate);
+  let amount = 0;
+  if (v.amount) { amount = money2(v.amount); if (amount == null) return; }
+  const fx = amount ? await rateFor(v.cur, v.rate) : { code: v.cur || "BRL", rate: 1 };
   if (!fx) return;
+  if (!amount) common.status = "A orçar";
+  else if (common.status === "A orçar") common.status = "Estimado";
   const data = { ...common, desc: v.desc.trim(), amount, cur: fx.code, rate: fx.rate };
   const bi = v.book ? bookingOpts.indexOf(v.book) - 1 : -1;
   if (bi >= 0) {
@@ -748,6 +756,12 @@ async function editBooking(b, pre = {}) {
   };
   let book = b;
   if (b) Object.assign(b, data); else { book = { id: uid(), done: false, ...data }; trip.bookings.push(book); }
+  const origin = pre.costId ? sc.costs.find(c => c.id === pre.costId) : null;
+  if (origin) {
+    origin.bookingId = book.id;
+    origin.cat = BOOKING_CAT[book.type] || origin.cat;
+    if (book.amount != null) { origin.status = origin.status === "A orçar" ? "Reservado" : origin.status; book.costSynced = true; }
+  }
   /* a reserva é o lugar único do valor: gera o custo ligado no cenário escolhido */
   const firstSync = book.amount != null && !book.costSynced;
   if (book.amount != null) book.costSynced = true;
@@ -1083,8 +1097,19 @@ const actions = {
     ui.scenarioId = sc.id;
     await editBooking(null, { ...kind[1], sc });
   },
+  "cost-quick"(el) {
+    const sc = findSc(el), cat = el.dataset.cat;
+    sc.costs.push({ id: uid(), desc: cat, cat, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "A orçar", refundable: true });
+    commit(true);
+    toast(`${cat}: marcado para orçar.`);
+  },
   async "cost-add"(el) { await editCost(findSc(el), null); },
-  async "cost-edit"(el) { const sc = findSc(el); await editCost(sc, sc.costs.find(c => c.id === el.dataset.id)); },
+  async "cost-edit"(el) {
+    const sc = findSc(el), cost = sc.costs.find(c => c.id === el.dataset.id);
+    const type = CAT_BOOKING[cost.cat];
+    if (cost.status === "A orçar" && !cost.amount && !cost.bookingId && type) { await editBooking(null, { type, desc: cost.desc !== cost.cat ? cost.desc : "", sc, costId: cost.id }); return; }
+    await editCost(sc, cost);
+  },
   async "act-add"(el) { await editActivity(Number(el.dataset.day), null); },
   async "act-edit"(el) {
     const day = Number(el.dataset.day);
