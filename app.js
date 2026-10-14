@@ -145,16 +145,18 @@ function renderHome() {
 }
 
 /* ---------- Histórico e estatísticas ---------- */
+/** Uma viagem pode ter vários países no campo "País", separados por vírgula, ponto e vírgula ou barra. */
+const countriesOf = text => [...new Map(String(text || "").split(/\s*[,;\/]\s*/).map(c => c.trim()).filter(Boolean).map(c => [c.toLowerCase(), c])).values()];
 function renderHistory() {
   const past = state.trips.filter(t => t.status === "concluida").sort((a, b) => (b.start || "").localeCompare(a.start || ""));
   if (!past.length) return `<div class="empty"><p>Registre as viagens que você já fez para ver países visitados e custos médios.</p></div>`;
   const costs = past.map(t => ({ t, ...tripCosts(t) }));
   const withCost = costs.filter(c => c.total > 0);
-  const countries = [...new Set(past.map(t => t.country.trim()).filter(Boolean))];
+  const countries = [...new Map(past.flatMap(t => countriesOf(t.country)).map(c => [c.toLowerCase(), c])).values()];
   const days = past.reduce((s, t) => s + t.days, 0);
   const avg = (fn) => withCost.length ? withCost.reduce((s, c) => s + fn(c), 0) / withCost.length : 0;
   const perDayAll = withCost.reduce((s, c) => s + c.total, 0) / Math.max(1, withCost.reduce((s, c) => s + c.t.days, 0));
-  const count = key => Object.entries(past.reduce((m, t) => { const k = key(t).trim(); if (k) m[k] = (m[k] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const count = key => Object.entries(past.reduce((m, t) => { for (const k of [].concat(key(t)).map(x => String(x || "").trim()).filter(Boolean)) m[k] = (m[k] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
   const catAvg = CATEGORIES.map(cat => {
     const rows = costs.filter(c => c.byCat[cat] > 0);
     return rows.length ? { cat, avg: rows.reduce((s, c) => s + c.byCat[cat], 0) / rows.length, n: rows.length } : null;
@@ -168,7 +170,7 @@ function renderHistory() {
       <div class="kpi"><small>Média por pessoa</small><strong>${brl(avg(c => c.total / Math.max(1, c.t.travelers.length)))}</strong></div>
     </div>
     <section class="card"><h2>Onde mais viajei</h2>
-      <div class="rank">${count(t => t.country).map(([k, n]) => `<div><span>${esc(k)}</span><b>${plural(n, "viagem", "viagens")}</b></div>`).join("") || `<p class="muted">Informe o país em cada viagem.</p>`}</div>
+      <div class="rank">${count(t => countriesOf(t.country)).map(([k, n]) => `<div><span>${esc(k)}</span><b>${plural(n, "viagem", "viagens")}</b></div>`).join("") || `<p class="muted">Informe o país em cada viagem.</p>`}</div>
       ${count(t => t.destName).length ? `<h3 class="sub">Destinos</h3><div class="rank">${count(t => t.destName).map(([k, n]) => `<div><span>${esc(k)}</span><b>${n}×</b></div>`).join("")}</div>` : ""}
     </section>
     ${catAvg.length ? `<section class="card"><h2>Média por categoria</h2><div class="rank">${catAvg.map(c => `<div><span>${CAT_ICON[c.cat]} ${c.cat}<small> · ${plural(c.n, "viagem", "viagens")}</small></span><b>${brl(c.avg)}</b></div>`).join("")}</div></section>` : ""}
