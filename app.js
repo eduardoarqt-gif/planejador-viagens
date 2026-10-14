@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=23";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=23";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=23";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=23";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=24";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=24";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=24";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=24";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -260,7 +260,8 @@ function renderDestPage(d) {
 /* ---------- Viagem ---------- */
 function renderTrip(trip) {
   const sc = activeScenario(trip);
-  const st = scenarioStats(sc, trip);
+  const official = chosenScenario(trip);
+  const st = scenarioStats(official, trip);
   const isActive = activeDayIndex(trip) != null;
   const tabs = [...(isActive ? [["hoje", "Hoje"]] : []), ["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["reservas", "Reservas"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]];
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
@@ -275,7 +276,7 @@ function renderTrip(trip) {
       <h1>${esc(trip.name)}</h1>
       <p class="muted">${[tripCountries(trip).join(", "), dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
       <div class="kpis">
-        <div><small>${trip.scenarios.length > 1 ? esc(sc.name) : "Total"}</small><strong>${brl(st.total)}</strong></div>
+        <div><small>${trip.scenarios.length > 1 ? `Total · ${esc(official.name)} ✓` : "Total"}</small><strong>${brl(st.total)}</strong></div>
         <div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div>
         <div><small>Por dia</small><strong>${brl(st.perDay)}</strong></div>
       </div>
