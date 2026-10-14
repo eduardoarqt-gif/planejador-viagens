@@ -409,7 +409,8 @@ function tabMap(trip) {
   const cities = [...new Set(chosenScenario(trip).segments.filter(s => !s.transit).map(s => s.city))];
   const list = mapPlaces(trip);
   const dayOpts = dayList(trip).map((d, i) => `<option value="${i}" ${String(i) === String(ui.mapDay) ? "selected" : ""}>Dia ${i + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, i))}` : ""}</option>`).join("");
-  return `<div class="chips scroll"><button class="chip-btn ${ui.mapCity === "" ? "active" : ""}" data-act="map-city" data-city="">Todas</button>${cities.map(c => `<button class="chip-btn ${ui.mapCity === c ? "active" : ""}" data-act="map-city" data-city="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+  const noCountry = !trip.country ? `<p class="notice">O mapa e o clima usam o <b>país da viagem</b> para achar ${cities[0] ? `"${esc(cities[0])}"` : "o destino"} certo. <button class="btn soft sm" data-act="trip-menu">Informar país</button></p>` : "";
+  return `${noCountry}<div class="chips scroll"><button class="chip-btn ${ui.mapCity === "" ? "active" : ""}" data-act="map-city" data-city="">Todas</button>${cities.map(c => `<button class="chip-btn ${ui.mapCity === c ? "active" : ""}" data-act="map-city" data-city="${esc(c)}">${esc(c)}</button>`).join("")}</div>
     <div class="section-head"><select id="mapDaySel" aria-label="Filtrar por dia"><option value="">Todos os dias</option>${dayOpts}</select><button class="btn primary" data-act="place-add">+ Local</button></div>
     <div id="map" class="map" role="application" aria-label="Mapa de atrações"></div>
     ${list.length ? `<div class="inline-actions"><a class="btn soft sm" target="_blank" rel="noopener" href="${gmapsRoute(list)}">Abrir rota no Google Maps</a></div>` : ""}
@@ -450,7 +451,7 @@ async function initMap(trip) {
     if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
     else {
       const city = ui.mapCity || chosenScenario(trip).segments.find(s => !s.transit)?.city;
-      const geo = city ? await geocodeCity(city).catch(() => null) : null;
+      const geo = city ? await geocodeCity(city, trip.country || "").catch(() => null) : null;
       map.setView(geo ? [geo.lat, geo.lon] : [20, 0], geo ? 12 : 2);
     }
   } catch {
@@ -576,7 +577,7 @@ async function fillWeather(trip) {
   days.forEach((d, i) => { if (!d.transit && d.city && d.city !== "A definir" && document.querySelector(`[data-wx="${i}"]`)) (byCity[d.city] ||= []).push(i); });
   for (const [city, idxs] of Object.entries(byCity)) {
     try {
-      const geo = await geocodeCity(city);
+      const geo = await geocodeCity(city, trip.country || "");
       if (!geo) continue;
       const w = await cityWeather(geo, dayISO(trip, idxs[0]), dayISO(trip, idxs.at(-1)));
       idxs.forEach(i => {
@@ -853,7 +854,7 @@ async function addPlace() {
   ], { confirm: "Buscar" });
   if (!q) return;
   let results = [];
-  try { results = await searchPlaces(q.query, q.city === "—" ? "" : q.city); } catch { toast("Não consegui buscar. Verifique a internet."); return; }
+  try { results = await searchPlaces(q.query, [q.city === "—" ? "" : q.city, trip.country].filter(Boolean).join(", ")); } catch { toast("Não consegui buscar. Verifique a internet."); return; }
   if (!results.length) { toast("Nada encontrado. Tente outro nome."); return; }
   const labels = results.map((r, i) => `${i + 1}. ${r.name} — ${r.label.split(",").slice(1, 3).join(",").trim()}`);
   const pick = await ask("Escolha o local", [{ name: "r", label: "Resultados", type: "select", options: labels, value: labels[0] }], { confirm: "Colocar pin" });

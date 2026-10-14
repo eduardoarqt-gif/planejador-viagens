@@ -10,13 +10,24 @@ export const addDays = (isoDate, n) => { const d = new Date(`${isoDate}T12:00:00
 export const diffDays = (a, b) => Math.round((new Date(`${a}T12:00:00`) - new Date(`${b}T12:00:00`)) / 864e5);
 
 /* cidade -> coordenadas (cache permanente) */
-export async function geocodeCity(name) {
-  const key = `geo:${name.trim().toLowerCase()}`;
+const plain = x => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+/* `country` desambigua cidades homônimas (ex.: Pipa, no Brasil, não é uma cidade da China). */
+export async function geocodeCity(name, country = "") {
+  const key = `geo2:${plain(name)}|${plain(country)}`;
   try { const c = JSON.parse(localStorage.getItem(key)); if (c) return c; } catch { /* segue */ }
-  const data = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=1&language=pt`);
-  const hit = data.results?.[0];
-  if (!hit) return null;
-  const geo = { lat: hit.latitude, lon: hit.longitude, country: hit.country || "" };
+  const data = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=10&language=pt`);
+  const list = data.results || [];
+  const want = plain(country);
+  let hit = want ? list.find(h => plain(h.country) === want || plain(h.country).includes(want) || want.includes(plain(h.country))) : list[0];
+  let geo = null;
+  if (hit) geo = { lat: hit.latitude, lon: hit.longitude, country: hit.country || "" };
+  else if (want) {
+    /* a base de cidades não tem o lugar nesse país: tenta busca de lugares (praias, bairros, vilas) */
+    const r = (await searchPlaces(name, country).catch(() => []))[0];
+    if (r) geo = { lat: r.lat, lon: r.lon, country };
+  }
+  if (!geo && !want && list[0]) geo = { lat: list[0].latitude, lon: list[0].longitude, country: list[0].country || "" };
+  if (!geo) return null;
   try { localStorage.setItem(key, JSON.stringify(geo)); } catch { /* ignora */ }
   return geo;
 }
