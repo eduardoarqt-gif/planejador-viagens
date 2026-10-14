@@ -32,6 +32,22 @@ export async function geocodeCity(name, country = "") {
   return geo;
 }
 
+/** Lugares com esse nome (para escolher "Pipa — RN, Brasil" em vez da homônima da China). */
+export async function geocodeOptions(name) {
+  const [osm, om] = await Promise.all([
+    getJson(`https://nominatim.openstreetmap.org/search?format=json&limit=6&addressdetails=1&accept-language=pt&q=${encodeURIComponent(name)}`).catch(() => []),
+    getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=6&language=pt`).catch(() => ({}))
+  ]);
+  const fromOsm = (osm || []).filter(r => r.address?.country).map(r => {
+    const a = r.address;
+    const where = [a.city || a.town || a.village || a.municipality || a.county, a.state].filter(Boolean).join(", ");
+    return { label: `${r.name || name}${where ? ` — ${where}` : ""}, ${a.country}`, country: a.country, lat: Number(r.lat), lon: Number(r.lon) };
+  });
+  const fromOm = (om.results || []).map(h => ({ label: `${h.name} — ${[h.admin1, h.country].filter(Boolean).join(", ")}`, country: h.country || "", lat: h.latitude, lon: h.longitude }));
+  const seen = new Set();
+  return [...fromOsm, ...fromOm].filter(o => !seen.has(o.label) && seen.add(o.label)).slice(0, 10);
+}
+
 export function weatherIcon(code, rain) {
   if (code == null) return rain >= 60 ? "🌧️" : rain >= 40 ? "🌦️" : rain >= 20 ? "⛅" : "☀️";
   if (code === 0) return "☀️";

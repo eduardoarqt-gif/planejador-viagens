@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js";
-import { geocodeCity, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js";
-import { ask, toast, brl, esc, plural, num } from "./ui.js";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=22";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=22";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=22";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=22";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -25,6 +25,37 @@ const route = () => location.hash.replace(/^#\/?/, "").split("/");
 const currentTrip = () => { const r = route(); return r[0] === "t" ? state.trips.find(t => t.id === r[1]) : null; };
 const currentDest = () => { const r = route(); return r[0] === "d" ? state.destinations.find(d => d.id === r[1]) : null; };
 const chosenScenario = trip => trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
+const normName = x => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+/** Trecho da rota (cenário escolhido primeiro) que corresponde à cidade. */
+const segOfCity = (trip, city) => {
+  const order = [chosenScenario(trip), ...trip.scenarios];
+  for (const sc of order) { const s = sc.segments.find(x => !x.transit && normName(x.city) === normName(city)); if (s && (s.country || s.lat != null)) return s; }
+  return null;
+};
+/** País de um destino: o do trecho da rota; senão, o padrão da viagem. */
+const countryOfCity = (trip, city) => segOfCity(trip, city)?.country || trip.country || "";
+/** Países da viagem: padrão + todos os destinos da rota escolhida. */
+const tripCountries = trip => [...new Map([
+  ...countriesOf(trip.country),
+  ...chosenScenario(trip).segments.filter(s => !s.transit && s.country).map(s => s.country.trim())
+].filter(Boolean).map(c => [c.toLowerCase(), c])).values()];
+async function geoOfCity(trip, city) {
+  const s = segOfCity(trip, city);
+  if (s && s.lat != null) return { lat: s.lat, lon: s.lon };
+  return geocodeCity(city, countryOfCity(trip, city));
+}
+/** Pergunta qual lugar é (Pipa — RN, Brasil / Pipa — China) e grava país e coordenadas no trecho. */
+async function pickPlaceFor(seg) {
+  let opts = [];
+  try { opts = await geocodeOptions(seg.city); } catch { return; }
+  if (!opts.length) return;
+  if (opts.length === 1) { Object.assign(seg, { country: opts[0].country, lat: opts[0].lat, lon: opts[0].lon }); return; }
+  const labels = [...opts.map(o => o.label), "Nenhum desses / deixar sem país"];
+  const v = await ask(`Qual "${seg.city}"?`, [{ name: "p", label: "Escolha o lugar certo", type: "select", options: labels, value: labels[0] }], { confirm: "Usar este" });
+  if (!v) return;
+  const o = opts[labels.indexOf(v.p)];
+  if (o) Object.assign(seg, { country: o.country, lat: o.lat, lon: o.lon });
+}
 const activeScenario = trip => trip.scenarios.find(s => s.id === ui.scenarioId) || chosenScenario(trip);
 const dayISO = (trip, i) => addDays(trip.start, i);
 const fmtDay = iso => new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "short" }).replace(".", "");
@@ -161,7 +192,7 @@ function renderHistory() {
   if (!past.length) return `<div class="empty"><p>Registre as viagens que você já fez para ver países visitados e custos médios.</p></div>`;
   const costs = past.map(t => ({ t, ...tripCosts(t) }));
   const withCost = costs.filter(c => c.total > 0);
-  const countries = [...new Map(past.flatMap(t => countriesOf(t.country)).map(c => [c.toLowerCase(), c])).values()];
+  const countries = [...new Map(past.flatMap(t => tripCountries(t)).map(c => [c.toLowerCase(), c])).values()];
   const days = past.reduce((s, t) => s + t.days, 0);
   const avg = (fn) => withCost.length ? withCost.reduce((s, c) => s + fn(c), 0) / withCost.length : 0;
   const perDayAll = withCost.reduce((s, c) => s + c.total, 0) / Math.max(1, withCost.reduce((s, c) => s + c.t.days, 0));
@@ -179,7 +210,7 @@ function renderHistory() {
       <div class="kpi"><small>Média por pessoa</small><strong>${brl(avg(c => c.total / Math.max(1, c.t.travelers.length)))}</strong></div>
     </div>
     <section class="card"><h2>Onde mais viajei</h2>
-      <div class="rank">${count(t => countriesOf(t.country)).map(([k, n]) => `<div><span>${esc(k)}</span><b>${plural(n, "viagem", "viagens")}</b></div>`).join("") || `<p class="muted">Informe o país em cada viagem.</p>`}</div>
+      <div class="rank">${count(t => tripCountries(t)).map(([k, n]) => `<div><span>${esc(k)}</span><b>${plural(n, "viagem", "viagens")}</b></div>`).join("") || `<p class="muted">Informe o país em cada viagem.</p>`}</div>
       ${count(t => t.destName).length ? `<h3 class="sub">Destinos</h3><div class="rank">${count(t => t.destName).map(([k, n]) => `<div><span>${esc(k)}</span><b>${n}×</b></div>`).join("")}</div>` : ""}
     </section>
     ${catAvg.length ? `<section class="card"><h2>Média por categoria</h2><div class="rank">${catAvg.map(c => `<div><span>${CAT_ICON[c.cat]} ${c.cat}<small> · ${plural(c.n, "viagem", "viagens")}</small></span><b>${brl(c.avg)}</b></div>`).join("")}</div></section>` : ""}
@@ -242,7 +273,7 @@ function renderTrip(trip) {
       </div>
       <span class="pill ${trip.status}">${TRIP_STATUS[trip.status]}</span>
       <h1>${esc(trip.name)}</h1>
-      <p class="muted">${[trip.country, dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
+      <p class="muted">${[tripCountries(trip).join(", "), dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
       <div class="kpis">
         <div><small>${trip.scenarios.length > 1 ? esc(sc.name) : "Total"}</small><strong>${brl(st.total)}</strong></div>
         <div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div>
@@ -411,7 +442,9 @@ function tabMap(trip) {
   const cities = [...new Set(chosenScenario(trip).segments.filter(s => !s.transit).map(s => s.city))];
   const list = mapPlaces(trip);
   const dayOpts = dayList(trip).map((d, i) => `<option value="${i}" ${String(i) === String(ui.mapDay) ? "selected" : ""}>Dia ${i + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, i))}` : ""}</option>`).join("");
-  const noCountry = !trip.country ? `<p class="notice">O mapa e o clima usam o <b>país da viagem</b> para achar ${cities[0] ? `"${esc(cities[0])}"` : "o destino"} certo. <button class="btn soft sm" data-act="trip-menu">Informar país</button></p>` : "";
+  const scSel = chosenScenario(trip);
+  const missIdx = scSel.segments.findIndex(s => !s.transit && s.city && s.city !== "A definir" && !s.country && s.lat == null && !trip.country);
+  const noCountry = missIdx >= 0 ? `<p class="notice">Para achar "${esc(scSel.segments[missIdx].city)}" no lugar certo, informe o país do destino. <button class="btn soft sm" data-act="seg-edit" data-sc="${scSel.id}" data-i="${missIdx}">Informar país</button></p>` : "";
   return `${noCountry}<div class="chips scroll"><button class="chip-btn ${ui.mapCity === "" ? "active" : ""}" data-act="map-city" data-city="">Todas</button>${cities.map(c => `<button class="chip-btn ${ui.mapCity === c ? "active" : ""}" data-act="map-city" data-city="${esc(c)}">${esc(c)}</button>`).join("")}</div>
     <div class="section-head"><select id="mapDaySel" aria-label="Filtrar por dia"><option value="">Todos os dias</option>${dayOpts}</select><button class="btn primary" data-act="place-add">+ Local</button></div>
     <div id="map" class="map" role="application" aria-label="Mapa de atrações"></div>
@@ -453,7 +486,7 @@ async function initMap(trip) {
     if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
     else {
       const city = ui.mapCity || chosenScenario(trip).segments.find(s => !s.transit)?.city;
-      const geo = city ? await geocodeCity(city, trip.country || "").catch(() => null) : null;
+      const geo = city ? await geoOfCity(trip, city).catch(() => null) : null;
       map.setView(geo ? [geo.lat, geo.lon] : [20, 0], geo ? 12 : 2);
     }
   } catch {
@@ -579,7 +612,7 @@ async function fillWeather(trip) {
   days.forEach((d, i) => { if (!d.transit && d.city && d.city !== "A definir" && document.querySelector(`[data-wx="${i}"]`)) (byCity[d.city] ||= []).push(i); });
   for (const [city, idxs] of Object.entries(byCity)) {
     try {
-      const geo = await geocodeCity(city, trip.country || "");
+      const geo = await geoOfCity(trip, city);
       if (!geo) continue;
       const w = await cityWeather(geo, dayISO(trip, idxs[0]), dayISO(trip, idxs.at(-1)));
       idxs.forEach(i => {
@@ -620,6 +653,7 @@ hooks.status = updateStatus;
 hooks.toast = toast;
 
 /* ---------- editores ---------- */
+const trip0 = () => currentTrip() || {};
 const findSc = el => currentTrip().scenarios.find(s => s.id === el.dataset.sc);
 const findSeg = el => findSc(el).segments[Number(el.dataset.i)];
 function cloneScenario(src) {
@@ -856,7 +890,7 @@ async function addPlace() {
   ], { confirm: "Buscar" });
   if (!q) return;
   let results = [];
-  try { results = await searchPlaces(q.query, [q.city === "—" ? "" : q.city, trip.country].filter(Boolean).join(", ")); } catch { toast("Não consegui buscar. Verifique a internet."); return; }
+  try { results = await searchPlaces(q.query, [q.city === "—" ? "" : q.city, countryOfCity(trip, q.city)].filter(Boolean).join(", ")); } catch { toast("Não consegui buscar. Verifique a internet."); return; }
   if (!results.length) { toast("Nada encontrado. Tente outro nome."); return; }
   const labels = results.map((r, i) => `${i + 1}. ${r.name} — ${r.label.split(",").slice(1, 3).join(",").trim()}`);
   const pick = await ask("Escolha o local", [{ name: "r", label: "Resultados", type: "select", options: labels, value: labels[0] }], { confirm: "Colocar pin" });
@@ -1076,17 +1110,28 @@ const actions = {
     const seg = findSeg(el);
     const v = await ask("Trecho da rota", [
       { name: "city", label: "Destino", value: seg.city, required: true },
+      { name: "country", label: "País (opcional)", value: seg.country || "", placeholder: trip0().country || "Ex.: Brasil", hint: "Deixe vazio para escolher na lista de lugares." },
       { name: "days", label: "Dias", type: "number", value: seg.days, min: 1 }
     ]);
-    if (v) { seg.city = v.city.trim(); seg.days = Math.max(1, Number(v.days) || 1); commit(true); }
+    if (!v) return;
+    const city = v.city.trim(), country = v.country.trim();
+    const changed = normName(city) !== normName(seg.city) || country !== (seg.country || "");
+    seg.city = city; seg.days = Math.max(1, Number(v.days) || 1);
+    if (changed) { seg.country = country; delete seg.lat; delete seg.lon; if (!seg.transit && !country) await pickPlaceFor(seg); }
+    commit(true);
   },
   async "seg-add"(el) {
     const sc = findSc(el);
     const v = await ask("Novo destino", [
       { name: "city", label: "Destino", required: true, placeholder: "Ex.: Paris" },
+      { name: "country", label: "País (opcional)", placeholder: trip0().country || "Ex.: França", hint: "Deixe vazio para escolher na lista de lugares." },
       { name: "days", label: "Dias", type: "number", value: 3, min: 1 }
     ], { confirm: "Adicionar" });
-    if (v) { sc.segments.push({ id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) }); commit(true); }
+    if (!v) return;
+    const seg = { id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) };
+    if (v.country.trim()) seg.country = v.country.trim(); else await pickPlaceFor(seg);
+    sc.segments.push(seg);
+    commit(true);
   },
   "seg-add-transit"(el) { findSc(el).segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true }); commit(true); },
 
