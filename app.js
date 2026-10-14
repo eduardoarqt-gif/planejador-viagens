@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=29";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=29";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=29";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=29";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=30";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=30";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=30";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=30";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -777,6 +777,9 @@ async function editBooking(b, pre = {}) {
   const v = await ask(b ? "Editar reserva" : "Nova reserva", [
     { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || pre.type || "Hotel" },
     { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
+    { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
+    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… O valor vira um custo ligado no cenário escolhido." },
+    { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
@@ -785,9 +788,6 @@ async function editBooking(b, pre = {}) {
     { name: "seat", label: "Assento(s)", value: b?.seat, placeholder: "Ex.: 14A, 14B", showIf: ["type", "Voo"] },
     { name: "baggage", label: "Bagagem", value: b?.baggage, placeholder: "Ex.: 1 despachada de 23 kg + mão", showIf: ["type", "Voo"] },
     { name: "supplier", label: "Contato do fornecedor", value: b?.supplier, placeholder: "Telefone, e-mail ou site" },
-    { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
-    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… O valor vira um custo ligado no cenário escolhido." },
-    { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
     { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
     { name: "freeCancelUntil", label: "Cancelamento grátis até", type: "date", value: b?.freeCancelUntil },
