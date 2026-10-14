@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=30";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=30";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=30";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=30";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=31";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=31";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=31";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=31";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -12,6 +12,8 @@ const ITEM_KINDS = [
   ["💰 Outro custo (alimentação, compras, chip…)", null]
 ];
 const CAT_BOOKING = { Passagens: "Voo", Hospedagem: "Hotel", Transporte: "Carro", Passeios: "Ingresso", Seguro: "Seguro" };
+const CURRENCIES = ["BRL", "USD", "EUR", "GBP", "ARS", "CLP", "UYU", "PYG", "COP", "PEN", "MXN", "CAD", "AUD", "CHF", "JPY", "CNY", "THB", "SGD", "AED", "TRY", "ZAR"];
+const curOptions = cur => (cur && !CURRENCIES.includes(cur) ? [cur, ...CURRENCIES] : CURRENCIES);
 const CHECKIN = ["Ainda não", "Aberto", "Feito"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
 const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
@@ -713,7 +715,7 @@ async function editCost(sc, cost) {
     ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Descrição e valor são editados na aba Reservas.` }] : [
       { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
       { name: "amount", label: "Valor ou cálculo (pode deixar vazio: fica \"a orçar\")", type: "money", value: cost?.amount ? num(cost.amount) : "", placeholder: "Ex.: 2.400 ou 180 x 7" },
-      { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
+      { name: "cur", label: "Moeda", type: "select", options: curOptions(cost?.cur), value: cost?.cur || "BRL", hint: "A cotação em reais é buscada sozinha." },
       { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" }
     ]),
     { name: "perPerson", label: `Valor é por pessoa (× ${trip.travelers.length})`, type: "checkbox", value: !!cost?.perPerson },
@@ -778,7 +780,7 @@ async function editBooking(b, pre = {}) {
     { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || pre.type || "Hotel" },
     { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
     { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
-    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… O valor vira um custo ligado no cenário escolhido." },
+    { name: "cur", label: "Moeda do valor", type: "select", options: curOptions(b?.cur), value: b?.cur || "BRL", hint: "O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
@@ -838,7 +840,7 @@ async function editExpense(e, trip) {
   const v = await ask(e ? "Editar despesa" : "Lançar despesa", [
     { name: "desc", label: "O que foi", value: e?.desc, required: true, placeholder: "Ex.: Jantar no Marais" },
     { name: "amount", label: "Valor ou cálculo", type: "money", value: e ? num(e.orig ?? e.amount) : "", placeholder: "Ex.: 85,50 ou 2.400 ÷ 4" },
-    { name: "cur", label: "Moeda", value: e?.cur || "BRL", hint: "Em moeda estrangeira, o valor em reais é calculado pela cotação do dia." },
+    { name: "cur", label: "Moeda", type: "select", options: curOptions(e?.cur), value: e?.cur || "BRL", hint: "Em moeda estrangeira, o valor em reais é calculado pela cotação do dia." },
     { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: e?.cur && e.cur !== "BRL" ? num(e.rate) : "" },
     { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: e?.cat || "Alimentação" },
     { name: "paidBy", label: "Quem pagou", type: "select", options: names, value: e?.paidBy || names[0] },
