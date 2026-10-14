@@ -1,11 +1,12 @@
 import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js";
 import { geocodeCity, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js";
 import { ask, toast, brl, esc, plural, num } from "./ui.js";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
 const COST_STATUS = ["Estimado", "Reservado", "Pago"];
+const CHECKIN = ["Ainda não", "Aberto", "Feito"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
 const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
 const TRIP_STATUS = { desejo: "Lista de desejos", rascunho: "Rascunho", planejada: "Planejada", andamento: "Em andamento", concluida: "Concluída" };
@@ -65,7 +66,7 @@ function tripCosts(trip) {
   return { byCat, total: Object.values(byCat).reduce((s, v) => s + v, 0) };
 }
 
-const commit = (keepScroll = false) => { save(); render(keepScroll); };
+const commit = (keepScroll = false) => { state.trips.forEach(syncLinkedCosts); save(); render(keepScroll); };
 
 /* ---------- Home ---------- */
 function tripCard(trip) {
@@ -360,7 +361,8 @@ function tabCosts(trip, sc) {
         const seg = c.segId ? sc.segments.find(s => s.id === c.segId) : null;
         const foreign = c.cur && c.cur !== "BRL";
         const unit = c.perPerson ? trip.travelers.length : 1;
-        const detail = [seg ? seg.city : "Geral", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
+        const linked = c.bookingId ? trip.bookings.find(b => b.id === c.bookingId) : null;
+        const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
         return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}">
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
           <div class="row-right"><b>${brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
@@ -456,7 +458,45 @@ function bookingPrice(b) {
 }
 const bookingBrl = b => (b.amount == null || b.amount === "" ? 0 : Number(b.amount) * (b.rate || 1));
 
+function bookingExtras(b, trip) {
+  const inBudget = chosenScenario(trip).costs.some(c => c.bookingId === b.id);
+  const bits = [b.confirmed ? "✓ Confirmada" : "", b.checkin ? `Check-in: ${b.checkin.toLowerCase()}` : "", b.seat ? `Assento ${esc(b.seat)}` : "", b.baggage ? `Bagagem: ${esc(b.baggage)}` : "", b.supplier ? `Contato: ${esc(b.supplier)}` : "", inBudget ? "🔗 no orçamento" : ""].filter(Boolean);
+  return `${bits.length ? `<small class="muted">${bits.join(" · ")}</small>` : ""}${b.notes ? `<small class="policy">${esc(b.notes)}</small>` : ""}`;
+}
+
+/* O que ainda falta reservar: cruza a rota do cenário escolhido com as reservas existentes. */
+function missingBookings(trip) {
+  const sc = chosenScenario(trip);
+  const out = [];
+  const norm = x => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const mentions = (b, city) => !!city && norm(`${b.desc} ${b.notes || ""}`).includes(norm(city));
+  /* [a, z) em datas: a saída (checkout) não ocupa a noite seguinte */
+  const inRange = (b, a, z) => { if (!trip.start || !b.date || !a) return false; return b.dateEnd ? b.date < z && b.dateEnd > a : b.date >= a && b.date < z; };
+  const bks = trip.bookings;
+  let day = 0;
+  const segs = sc.segments.map(s => { const r = { ...s, from: day, to: day + s.days - 1 }; day += s.days; return r; });
+  const cities = segs.filter(s => !s.transit && s.city && s.city !== "A definir");
+  for (const s of cities) {
+    const a = trip.start ? dayISO(trip, s.from) : "", z = trip.start ? dayISO(trip, s.to + 1) : "";
+    if (!bks.some(b => b.type === "Hotel" && (mentions(b, s.city) || inRange(b, a, z)))) {
+      out.push({ type: "Hotel", desc: `Hotel em ${s.city}`, date: a, label: `Hospedagem em ${s.city} (${s.days} ${s.days === 1 ? "dia" : "dias"})` });
+    }
+  }
+  for (let i = 1; i < cities.length; i += 1) {
+    const from = cities[i - 1], to = cities[i];
+    const d = trip.start ? dayISO(trip, to.from) : "", dPrev = trip.start ? dayISO(trip, Math.max(0, to.from - 1)) : "";
+    if (!bks.some(b => ["Voo", "Transfer", "Carro", "Outro"].includes(b.type) && (mentions(b, to.city) || inRange(b, dPrev, addDays(d, 1))))) {
+      out.push({ type: "Voo", desc: `${from.city} → ${to.city}`, date: d, label: `Transporte ${from.city} → ${to.city}` });
+    }
+  }
+  if (cities.length && !bks.some(b => b.type === "Voo")) out.push({ type: "Voo", desc: "Passagens de ida e volta", date: trip.start || "", label: "Passagens de ida e volta" });
+  if (cities.length && !bks.some(b => b.type === "Seguro")) out.push({ type: "Seguro", desc: "Seguro viagem", date: trip.start || "", label: "Seguro viagem" });
+  return out;
+}
+
 function tabBookings(trip) {
+  const missing = trip.status === "concluida" ? [] : missingBookings(trip);
+  const missingHtml = missing.length ? `<section class="alerts"><h3>O que falta reservar</h3>${missing.map((m, i) => `<button class="alert-row" data-act="book-add" data-miss="${i}"><span><b>${esc(m.label)}</b><small>Toque para cadastrar</small></span><b>+</b></button>`).join("")}</section>` : "";
   const sorted = trip.bookings.slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
   const open = sorted.filter(b => !b.done), done = sorted.filter(b => b.done);
   const item = b => `<div class="booking ${b.done ? "done" : ""}">
@@ -465,12 +505,14 @@ function tabBookings(trip) {
       <strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong>
       <small>${[b.type, b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ")}</small>
       ${bookingPrice(b) ? `<small class="price"><b>${bookingPrice(b)}</b></small>` : ""}
+      ${bookingExtras(b, trip)}
       ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Cancelamento: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
     </button>
     <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
   const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b), 0);
   return `<div class="section-head"><p class="muted">Reservas, localizadores, condições de cancelamento e prazos.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
-    ${pricedTotal ? `<div class="card"><div class="bal"><span>Valor das reservas com preço <small class="muted">(informativo)</small></span><b>${brl(pricedTotal)}</b></div></div>` : ""}
+    ${pricedTotal ? `<div class="card"><div class="bal"><span>Valor das reservas com preço <small class="muted">(já no orçamento do cenário escolhido)</small></span><b>${brl(pricedTotal)}</b></div></div>` : ""}
+    ${missingHtml}
     ${open.length ? `<div class="card list">${open.map(item).join("")}</div>` : `<div class="empty"><p>Nada pendente.</p></div>`}
     ${done.length ? `<h3 class="sub">Concluídas</h3><div class="card list">${done.map(item).join("")}</div>` : ""}`;
 }
@@ -591,26 +633,47 @@ async function editCost(sc, cost) {
   const trip = currentTrip();
   const places = ["Geral (viagem toda)", ...sc.segments.map(s => s.city)];
   const segName = cost?.segId ? sc.segments.find(s => s.id === cost.segId)?.city : null;
+  const linked = cost?.bookingId ? trip.bookings.find(b => b.id === cost.bookingId) : null;
+  const bookingLabel = b => `${BOOKING_ICON[b.type] || "📌"} ${b.desc}${b.date ? ` · ${fmtShort(b.date)}` : ""}`;
+  const free = trip.bookings.filter(b => !sc.costs.some(c => c.bookingId === b.id && c !== cost));
+  const bookingOpts = ["— nenhuma —", ...free.map(bookingLabel)];
   const v = await ask(cost ? "Editar custo" : "Novo custo", [
-    { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
+    ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Descrição e valor são editados na aba Reservas.` }] : [
+      { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
+      { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? num(cost.amount) : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
+      { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
+      { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" }
+    ]),
     { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
-    { name: "amount", label: "Valor ou cálculo", type: "money", value: cost ? num(cost.amount) : "", required: true, placeholder: "Ex.: 2.400 ou 180 x 7" },
-    { name: "cur", label: "Moeda", value: cost?.cur || "BRL", hint: "BRL, USD, EUR, GBP… A cotação em reais é buscada sozinha." },
-    { name: "rate", label: "Cotação em reais (opcional)", type: "money", value: cost?.rate && cost.rate !== 1 ? num(cost.rate) : "", placeholder: "Deixe vazio para usar a cotação do dia" },
     { name: "perPerson", label: `Valor é por pessoa (× ${trip.travelers.length})`, type: "checkbox", value: !!cost?.perPerson },
     { name: "where", label: "Vinculado a", type: "select", options: places, value: segName || places[0] },
     { name: "status", label: "Situação", type: "select", options: COST_STATUS, value: cost?.status || "Estimado" },
     { name: "refundable", label: "Reembolsável", type: "checkbox", value: cost ? cost.refundable !== false : true },
+    ...(linked ? [{ name: "unlink", label: "Desligar da reserva", type: "checkbox", value: false }]
+      : trip.bookings.length ? [{ name: "book", label: "Ligar a uma reserva já cadastrada", type: "select", options: bookingOpts, value: bookingOpts[0], hint: "A reserva passa a ser a fonte do valor e da descrição." }] : []),
     ...(cost ? [{ name: "del", label: "Excluir este custo", type: "checkbox", value: false }] : [])
   ]);
   if (!v) return;
   if (v.del) { sc.costs = sc.costs.filter(c => c.id !== cost.id); commit(); return; }
+  const seg = sc.segments.find(s => s.city === v.where);
+  const common = { cat: v.cat, perPerson: v.perPerson, segId: seg?.id || "", status: v.status, refundable: v.refundable };
+  if (linked) {
+    Object.assign(cost, common);
+    if (v.unlink) delete cost.bookingId;
+    commit();
+    return;
+  }
   const amount = money2(v.amount);
   if (amount == null) return;
   const fx = await rateFor(v.cur, v.rate);
   if (!fx) return;
-  const seg = sc.segments.find(s => s.city === v.where);
-  const data = { desc: v.desc.trim(), cat: v.cat, amount, cur: fx.code, rate: fx.rate, perPerson: v.perPerson, segId: seg?.id || "", status: v.status, refundable: v.refundable };
+  const data = { ...common, desc: v.desc.trim(), amount, cur: fx.code, rate: fx.rate };
+  const bi = v.book ? bookingOpts.indexOf(v.book) - 1 : -1;
+  if (bi >= 0) {
+    const b = free[bi];
+    data.bookingId = b.id;
+    if (b.amount == null || b.amount === "") { b.amount = amount; b.cur = fx.code; b.rate = fx.rate; b.updatedAt = Date.now(); }
+  }
   if (cost) Object.assign(cost, data); else sc.costs.push({ id: uid(), ...data });
   commit();
 }
@@ -634,16 +697,22 @@ async function editActivity(day, act) {
   commit();
 }
 
-async function editBooking(b) {
+async function editBooking(b, pre = {}) {
   const trip = currentTrip();
+  const sc = chosenScenario(trip);
   const v = await ask(b ? "Editar reserva" : "Nova reserva", [
-    { name: "desc", label: "Descrição", value: b?.desc, required: true, placeholder: "Ex.: Hotel Marais" },
-    { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || "Hotel" },
-    { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date },
+    { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
+    { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || pre.type || "Hotel" },
+    { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
-    { name: "amount", label: "Valor pago (opcional)", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
-    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… Informativo; os totais vêm de Despesas e Custos." },
+    { name: "confirmed", label: "Confirmação recebida", type: "checkbox", value: !!b?.confirmed },
+    { name: "checkin", label: "Check-in online", type: "select", options: CHECKIN, value: b?.checkin || CHECKIN[0], showIf: ["type", "Voo"] },
+    { name: "seat", label: "Assento(s)", value: b?.seat, placeholder: "Ex.: 14A, 14B", showIf: ["type", "Voo"] },
+    { name: "baggage", label: "Bagagem", value: b?.baggage, placeholder: "Ex.: 1 despachada de 23 kg + mão", showIf: ["type", "Voo"] },
+    { name: "supplier", label: "Contato do fornecedor", value: b?.supplier, placeholder: "Telefone, e-mail ou site" },
+    { name: "amount", label: "Valor (opcional) — entra no orçamento", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
+    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
     { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
@@ -651,10 +720,11 @@ async function editBooking(b) {
     { name: "cancelPolicy", label: "Condições de cancelamento", type: "textarea", value: b?.cancelPolicy, placeholder: "Ex.: grátis até 48 h antes; depois, 1ª diária" },
     { name: "changePolicy", label: "Remarcação / alteração", type: "textarea", value: b?.changePolicy, placeholder: "Ex.: remarcação com taxa de 10%" },
     { name: "deadline", label: "Prazo de pagamento", type: "date", value: b?.deadline },
+    { name: "notes", label: "Observações (sala VIP, passageiros, extras)", type: "textarea", value: b?.notes },
     ...(b ? [{ name: "del", label: "Excluir esta reserva", type: "checkbox", value: false }] : [])
   ]);
   if (!v) return;
-  if (v.del) { trip.bookings = trip.bookings.filter(x => x.id !== b.id); commit(); return; }
+  if (v.del) { trip.bookings = trip.bookings.filter(x => x.id !== b.id); trip.scenarios.forEach(s => s.costs.forEach(c => { if (c.bookingId === b.id) delete c.bookingId; })); commit(); return; }
   let amount = null, cur = "BRL", rate = 1;
   if (v.amount) {
     amount = money2(v.amount);
@@ -665,10 +735,20 @@ async function editBooking(b) {
   }
   const data = {
     amount, cur, rate, paidBy: v.paidBy === "—" ? "" : v.paidBy,
+    confirmed: v.confirmed, checkin: v.type === "Voo" && v.checkin !== CHECKIN[0] ? v.checkin : "",
+    seat: v.type === "Voo" ? (v.seat || "").trim() : (b?.seat || ""), baggage: v.type === "Voo" ? (v.baggage || "").trim() : (b?.baggage || ""),
+    supplier: (v.supplier || "").trim(), notes: (v.notes || "").trim(),
     desc: v.desc.trim(), type: v.type, date: v.date, dateEnd: v.dateEnd, locator: v.locator.trim(), link: v.link.trim(),
     attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: v.changePolicy.trim(), deadline: v.deadline
   };
-  if (b) Object.assign(b, data); else trip.bookings.push({ id: uid(), done: false, ...data });
+  let book = b;
+  if (b) Object.assign(b, data); else { book = { id: uid(), done: false, ...data }; trip.bookings.push(book); }
+  /* a reserva é o lugar único do valor: gera o custo ligado no cenário escolhido */
+  const firstSync = book.amount != null && !book.costSynced;
+  if (book.amount != null) book.costSynced = true;
+  if (firstSync && !trip.scenarios.some(s => s.costs.some(c => c.bookingId === book.id))) {
+    sc.costs.push({ id: uid(), desc: book.desc, cat: BOOKING_CAT[book.type] || "Outros", amount: book.amount, cur: book.cur, rate: book.rate, perPerson: false, segId: "", status: "Reservado", refundable: true, bookingId: book.id });
+  }
   commit();
 }
 
@@ -1002,7 +1082,7 @@ const actions = {
     ui.hojeDay = Math.min(trip.days - 1, Math.max(0, cur + Number(el.dataset.d)));
     render(true);
   },
-  async "book-add"() { await editBooking(null); },
+  async "book-add"(el) { const m = el?.dataset?.miss != null ? missingBookings(currentTrip())[Number(el.dataset.miss)] : null; await editBooking(null, m || {}); },
   async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
   "book-toggle"(el) { const b = currentTrip().bookings.find(x => x.id === el.dataset.id); b.done = !b.done; commit(true); },
   async "open-file"(el) {

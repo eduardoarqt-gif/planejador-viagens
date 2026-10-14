@@ -20,6 +20,32 @@ export const DEFAULT_CHECKLIST = [
 export const state = { trips: [], destinations: [], contacts: [], deleted: {}, checklistTemplate: DEFAULT_CHECKLIST, tplUpdatedAt: 0 };
 export const hooks = { render() {}, status() {}, toast() {} };
 
+export const BOOKING_CAT = { Voo: "Passagens", Hotel: "Hospedagem", Carro: "Transporte", Transfer: "Transporte", Ingresso: "Passeios", Seguro: "Seguro", Outro: "Outros" };
+
+/* Reserva com valor sempre tem um custo ligado no cenário escolhido (viagens concluídas não são alteradas). */
+function linkBookingCosts(t) {
+  if (t.status === "concluida" || !t.scenarios?.length) return;
+  const sc = t.scenarios.find(s => s.id === t.chosenId) || t.scenarios[0];
+  for (const b of t.bookings || []) {
+    if (b.costSynced || b.amount == null || b.amount === "") continue;
+    b.costSynced = true;
+    if (t.scenarios.some(s => s.costs.some(c => c.bookingId === b.id))) continue;
+    sc.costs.push({ id: uid(), desc: b.desc, cat: BOOKING_CAT[b.type] || "Outros", amount: Number(b.amount), cur: b.cur || "BRL", rate: b.rate || 1, perPerson: false, segId: "", status: "Reservado", refundable: true, bookingId: b.id });
+  }
+}
+
+/* Custo ligado a uma reserva (bookingId): descrição e valor vêm sempre da reserva, para não divergirem. */
+export function syncLinkedCosts(t) {
+  const byId = new Map((t.bookings || []).map(b => [b.id, b]));
+  for (const sc of t.scenarios || []) for (const c of sc.costs || []) {
+    if (!c.bookingId) continue;
+    const b = byId.get(c.bookingId);
+    if (!b) { delete c.bookingId; continue; }
+    c.desc = b.desc;
+    if (b.amount != null && b.amount !== "") { c.amount = Number(b.amount); c.cur = b.cur || "BRL"; c.rate = b.rate || 1; }
+  }
+}
+
 export function normalizeTrip(t) {
   t.places ||= [];
   t.bookings ||= [];
@@ -28,6 +54,8 @@ export function normalizeTrip(t) {
   t.country ||= "";
   t.destName ||= "";
   t.checklist ||= state.checklistTemplate.map(i => ({ id: uid(), group: i.group, text: i.text, done: false }));
+  linkBookingCosts(t);
+  syncLinkedCosts(t);
   return t;
 }
 
