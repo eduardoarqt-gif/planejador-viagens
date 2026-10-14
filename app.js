@@ -578,7 +578,7 @@ function tabBookings(trip) {
       <small>${[b.type, b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ")}</small>
       ${bookingPrice(b) ? `<small class="price"><b>${bookingPrice(b)}</b></small>` : ""}
       ${bookingExtras(b, trip)}
-      ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Condições: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
+      ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Cancelamento: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
     </button>
     <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
   const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b, trip), 0);
@@ -793,8 +793,8 @@ async function editBooking(b, pre = {}) {
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
     { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
     { name: "freeCancelUntil", label: "Cancelamento grátis até", type: "date", value: b?.freeCancelUntil },
-    { name: "cancelPolicy", label: "Condições de cancelamento / alteração", type: "textarea", value: [b?.cancelPolicy, b?.changePolicy].filter(Boolean).join("
-"), placeholder: "Ex.: grátis até 48 h antes; depois, 1ª diária. Remarcação com taxa de 10%" },
+    { name: "cancelPolicy", label: "Condições de cancelamento", type: "textarea", value: b?.cancelPolicy, placeholder: "Ex.: grátis até 48 h antes; depois, 1ª diária" },
+    { name: "changePolicy", label: "Remarcação / alteração", type: "textarea", value: b?.changePolicy, placeholder: "Ex.: remarcação com taxa de 10%" },
     { name: "deadline", label: "Prazo de pagamento", type: "date", value: b?.deadline },
     { name: "notes", label: "Observações (sala VIP, passageiros, extras)", type: "textarea", value: b?.notes },
     ...(b ? [{ name: "del", label: "Excluir esta reserva", type: "checkbox", value: false }] : [])
@@ -815,7 +815,7 @@ async function editBooking(b, pre = {}) {
     seat: v.type === "Voo" ? (v.seat || "").trim() : (b?.seat || ""), baggage: v.type === "Voo" ? (v.baggage || "").trim() : (b?.baggage || ""),
     supplier: (v.supplier || "").trim(), notes: (v.notes || "").trim(),
     desc: v.desc.trim(), type: v.type, date: v.date, dateEnd: v.dateEnd, locator: v.locator.trim(), link: v.link.trim(),
-    attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: "", deadline: v.deadline
+    attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: v.changePolicy.trim(), deadline: v.deadline
   };
   let book = b;
   if (b) Object.assign(b, data); else { book = { id: uid(), done: false, ...data }; trip.bookings.push(book); }
