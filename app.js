@@ -201,7 +201,7 @@ function renderDestPage(d) {
       <label class="check big"><input type="checkbox" data-act="dest-repeat" data-id="${d.id}" ${d.repeat ? "checked" : ""}><span>Repetiria este destino</span></label>
     </header>
     <main class="tab-body">
-      ${sec("Resumo", "dest-edit-summary", `${kv("Pontos fortes", val(d.pros))}${kv("Pontos fracos", val(d.cons))}${kv("Perrengues", val(d.perrengues))}`)}
+      ${sec("Resumo", "dest-edit-summary", `${kv("Minha nota", d.rating != null && d.rating !== "" ? `${String(d.rating).replace(".", ",")} / 10` : val(""))}${kv("Melhor época", val(d.bestSeason))}${kv("Pontos fortes", val(d.pros))}${kv("Pontos fracos", val(d.cons))}${kv("Perrengues", val(d.perrengues))}`)}
       ${sec("Transporte", "dest-edit-transport", `${kv("O que usar", val(d.transport?.use))}${kv("Vale alugar carro?", val(d.transport?.car))}${kv("Tem metrô?", val(d.transport?.metro))}${d.transport?.notes ? kv("Notas", val(d.transport.notes)) : ""}`)}
       <section class="card"><div class="card-head"><h2>Pontos turísticos</h2><button class="btn soft sm" data-act="attr-add" data-id="${d.id}">+ Ponto</button></div>
         ${(d.attractions || []).map(a => `<div class="check-row ${a.visited ? "done" : ""}"><button class="check-btn" data-act="attr-toggle" data-id="${d.id}" data-a="${a.id}" aria-label="Marcar como conhecido">${a.visited ? "✓" : ""}</button><button class="check-text" data-act="attr-edit" data-id="${d.id}" data-a="${a.id}">${esc(a.name)}</button></div>`).join("") || `<p class="muted tiny">O que conhecer. Marque os que você já visitou.</p>`}
@@ -1071,11 +1071,17 @@ const actions = {
   async "dest-edit-summary"(el) {
     const d = destById(el.dataset.id);
     const v = await ask("Resumo do destino", [
+      { name: "rating", label: "Minha nota (0 a 10)", type: "number", value: d.rating ?? "", min: 0, step: "0.5" },
+      { name: "bestSeason", label: "Melhor época para ir", value: d.bestSeason, placeholder: "Ex.: novembro a fevereiro" },
       { name: "pros", label: "Pontos fortes", type: "textarea", value: d.pros },
       { name: "cons", label: "Pontos fracos", type: "textarea", value: d.cons },
       { name: "perrengues", label: "Perrengues", type: "textarea", value: d.perrengues }
     ]);
-    if (v) { Object.assign(d, { pros: v.pros.trim(), cons: v.cons.trim(), perrengues: v.perrengues.trim() }); commit(true); }
+    if (v) {
+      const nota = v.rating === "" || v.rating == null ? null : Math.min(10, Math.max(0, Number(v.rating)));
+      Object.assign(d, { rating: Number.isFinite(nota) ? nota : null, bestSeason: (v.bestSeason || "").trim(), pros: v.pros.trim(), cons: v.cons.trim(), perrengues: v.perrengues.trim() });
+      commit(true);
+    }
   },
   async "dest-edit-transport"(el) {
     const d = destById(el.dataset.id);
