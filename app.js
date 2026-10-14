@@ -447,6 +447,15 @@ async function initMap(trip) {
 }
 
 /* --- Reservas --- */
+/** Texto do valor pago de uma reserva (informativo: os totais da viagem vêm de Despesas e Custos). */
+function bookingPrice(b) {
+  if (b.amount == null || b.amount === "") return "";
+  const cur = (b.cur || "BRL").toUpperCase();
+  const base = cur === "BRL" ? brl(b.amount) : `${cur} ${num(b.amount)} (≈ ${brl(b.amount * (b.rate || 1))})`;
+  return `Pago ${base}${b.paidBy && b.paidBy !== "—" ? ` por ${esc(b.paidBy)}` : ""}`;
+}
+const bookingBrl = b => (b.amount == null || b.amount === "" ? 0 : Number(b.amount) * (b.rate || 1));
+
 function tabBookings(trip) {
   const sorted = trip.bookings.slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
   const open = sorted.filter(b => !b.done), done = sorted.filter(b => b.done);
@@ -455,10 +464,13 @@ function tabBookings(trip) {
     <button class="booking-main" data-act="book-edit" data-id="${b.id}">
       <strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong>
       <small>${[b.type, b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ")}</small>
+      ${bookingPrice(b) ? `<small class="price"><b>${bookingPrice(b)}</b></small>` : ""}
       ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Cancelamento: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
     </button>
     <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
+  const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b), 0);
   return `<div class="section-head"><p class="muted">Reservas, localizadores, condições de cancelamento e prazos.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
+    ${pricedTotal ? `<div class="card"><div class="bal"><span>Valor das reservas com preço <small class="muted">(informativo)</small></span><b>${brl(pricedTotal)}</b></div></div>` : ""}
     ${open.length ? `<div class="card list">${open.map(item).join("")}</div>` : `<div class="empty"><p>Nada pendente.</p></div>`}
     ${done.length ? `<h3 class="sub">Concluídas</h3><div class="card list">${done.map(item).join("")}</div>` : ""}`;
 }
@@ -630,6 +642,9 @@ async function editBooking(b) {
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
+    { name: "amount", label: "Valor pago (opcional)", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
+    { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… Informativo; os totais vêm de Despesas e Custos." },
+    { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
     { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
     { name: "freeCancelUntil", label: "Cancelamento grátis até", type: "date", value: b?.freeCancelUntil },
@@ -640,7 +655,16 @@ async function editBooking(b) {
   ]);
   if (!v) return;
   if (v.del) { trip.bookings = trip.bookings.filter(x => x.id !== b.id); commit(); return; }
+  let amount = null, cur = "BRL", rate = 1;
+  if (v.amount) {
+    amount = money2(v.amount);
+    if (amount == null) return;
+    const fx = await rateFor(v.cur, "");
+    if (!fx) return;
+    cur = fx.code; rate = fx.rate;
+  }
   const data = {
+    amount, cur, rate, paidBy: v.paidBy === "—" ? "" : v.paidBy,
     desc: v.desc.trim(), type: v.type, date: v.date, dateEnd: v.dateEnd, locator: v.locator.trim(), link: v.link.trim(),
     attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: v.changePolicy.trim(), deadline: v.deadline
   };
