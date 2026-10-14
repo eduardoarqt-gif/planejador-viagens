@@ -38,7 +38,9 @@ function activeDayIndex(trip) {
 }
 const activeTrip = () => state.trips.filter(t => activeDayIndex(t) != null).sort((a, b) => (b.status === "andamento") - (a.status === "andamento"))[0] || null;
 
-function costBrl(cost, trip) { return cost.amount * (cost.rate || 1) * (cost.perPerson ? trip.travelers.length : 1); }
+/* Passagem é sempre valor por pessoa (viagens concluídas mantêm o que foi lançado na época). */
+const isPerPerson = (cost, trip) => !!cost.perPerson || (cost.cat === "Passagens" && trip.status !== "concluida");
+function costBrl(cost, trip) { return cost.amount * (cost.rate || 1) * (isPerPerson(cost, trip) ? trip.travelers.length : 1); }
 function scenarioStats(sc, trip) {
   const total = sc.costs.reduce((s, c) => s + costBrl(c, trip), 0);
   const used = sc.segments.reduce((s, x) => s + x.days, 0);
@@ -366,9 +368,9 @@ function tabCosts(trip, sc) {
       ${items.map(c => {
         const seg = c.segId ? sc.segments.find(s => s.id === c.segId) : null;
         const foreign = c.cur && c.cur !== "BRL";
-        const unit = c.perPerson ? trip.travelers.length : 1;
+        const unit = isPerPerson(c, trip) ? trip.travelers.length : 1;
         const linked = c.bookingId ? trip.bookings.find(b => b.id === c.bookingId) : null;
-        const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", c.perPerson ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
+        const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", isPerPerson(c, trip) ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
         return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}">
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
           <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
@@ -465,9 +467,9 @@ function bookingPrice(b) {
   if (b.amount == null || b.amount === "") return "";
   const cur = (b.cur || "BRL").toUpperCase();
   const base = cur === "BRL" ? brl(b.amount) : `${cur} ${num(b.amount)} (≈ ${brl(b.amount * (b.rate || 1))})`;
-  return `Valor ${base}${b.paidBy && b.paidBy !== "—" ? ` por ${esc(b.paidBy)}` : ""}`;
+  return `Valor ${base}${b.type === "Voo" ? " por pessoa" : ""}${b.paidBy && b.paidBy !== "—" ? ` por ${esc(b.paidBy)}` : ""}`;
 }
-const bookingBrl = b => (b.amount == null || b.amount === "" ? 0 : Number(b.amount) * (b.rate || 1));
+const bookingBrl = (b, trip) => (b.amount == null || b.amount === "" ? 0 : Number(b.amount) * (b.rate || 1) * (b.type === "Voo" && trip.status !== "concluida" ? trip.travelers.length : 1));
 
 function bookingExtras(b, trip) {
   const inBudget = chosenScenario(trip).costs.some(c => c.bookingId === b.id);
@@ -520,7 +522,7 @@ function tabBookings(trip) {
       ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Cancelamento: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
     </button>
     <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
-  const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b), 0);
+  const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b, trip), 0);
   return `<div class="section-head"><p class="muted">Reservas, localizadores, condições de cancelamento e prazos.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
     ${pricedTotal ? `<div class="card"><div class="bal"><span>Valor das reservas com preço <small class="muted">(já no orçamento do cenário escolhido)</small></span><b>${brl(pricedTotal)}</b></div></div>` : ""}
     ${missingHtml}
@@ -725,7 +727,7 @@ async function editBooking(b, pre = {}) {
     { name: "seat", label: "Assento(s)", value: b?.seat, placeholder: "Ex.: 14A, 14B", showIf: ["type", "Voo"] },
     { name: "baggage", label: "Bagagem", value: b?.baggage, placeholder: "Ex.: 1 despachada de 23 kg + mão", showIf: ["type", "Voo"] },
     { name: "supplier", label: "Contato do fornecedor", value: b?.supplier, placeholder: "Telefone, e-mail ou site" },
-    { name: "amount", label: "Valor (opcional) — entra no orçamento", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
+    { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
     { name: "cur", label: "Moeda do valor", value: b?.cur || "BRL", hint: "BRL, USD, EUR… O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
@@ -1095,7 +1097,7 @@ const actions = {
     const v = await ask("Adicionar item", [
       { name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] },
       { name: "desc", label: "Descrição (opcional)", placeholder: "Ex.: Gol SP → Natal" },
-      { name: "amount", label: "Valor em reais (opcional)", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Com valor, o item entra direto no orçamento. Sem valor, abre o formulário completo (outra moeda, datas, localizador…)." }
+      { name: "amount", label: "Valor em reais (opcional) — passagem: por pessoa", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Com valor, o item entra direto no orçamento. Sem valor, abre o formulário completo (outra moeda, datas, localizador…)." }
     ], { confirm: "Continuar" });
     if (!v) return;
     const kind = ITEM_KINDS.find(k => k[0] === v.kind);
