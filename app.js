@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=24";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=24";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=24";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=24";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=25";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=25";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=25";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=25";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -105,7 +105,13 @@ function tripCosts(trip) {
   return { byCat, total: Object.values(byCat).reduce((s, v) => s + v, 0) };
 }
 
-const commit = (keepScroll = false) => { state.trips.forEach(syncLinkedCosts); save(); render(keepScroll); };
+/* Destino principal de viagens em planejamento = primeiro destino da rota escolhida (liga ao banco de destinos). */
+function syncMainDest(t) {
+  if (t.status === "concluida" || !t.scenarios?.length) return;
+  const first = chosenScenario(t).segments.find(s => !s.transit && s.city && s.city !== "Destino" && s.city !== "A definir");
+  if (first) t.destName = first.city;
+}
+const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); }); save(); render(keepScroll); };
 
 /* ---------- Home ---------- */
 function tripCard(trip) {
@@ -1014,8 +1020,10 @@ const actions = {
     const trip = currentTrip();
     const v = await ask("Opções da viagem", [
       { name: "name", label: "Nome", value: trip.name, required: true },
-      { name: "country", label: "País", value: trip.country },
-      { name: "destName", label: "Destino principal", value: trip.destName, hint: "Liga a viagem ao banco de destinos e às estatísticas." },
+      ...(trip.status === "concluida" ? [
+        { name: "country", label: "País", value: trip.country },
+        { name: "destName", label: "Destino principal", value: trip.destName, hint: "Liga a viagem ao banco de destinos e às estatísticas." }
+      ] : [{ name: "_dest", type: "note", label: "País e destino ficam em cada destino da rota (aba Cenários → + Destino / tocar no nome)." }]),
       { name: "days", label: "Duração (dias)", type: "number", value: trip.days, min: 1 },
       { name: "start", label: "Data de saída", type: "date", value: trip.start },
       { name: "travelers", label: "Viajantes", value: trip.travelers.join(", ") },
@@ -1026,7 +1034,7 @@ const actions = {
     if (!v) return;
     if (v.del) { removeItem("trips", trip.id); location.hash = "#/"; return; }
     Object.assign(trip, {
-      name: v.name.trim() || trip.name, country: v.country.trim(), destName: v.destName.trim(),
+      name: v.name.trim() || trip.name, country: v.country != null ? v.country.trim() : trip.country, destName: v.destName != null ? v.destName.trim() : trip.destName,
       days: Math.max(1, Number(v.days) || trip.days), start: v.start, travelers: parseNames(v.travelers),
       status: statusKey(v.status) || trip.status, wouldRepeat: v.wouldRepeat
     });
