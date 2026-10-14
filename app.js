@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=22";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=22";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=22";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=22";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=23";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=23";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=23";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=23";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -395,7 +395,7 @@ function tabCosts(trip, sc) {
   const groups = CATEGORIES.map(cat => {
     const items = sc.costs.filter(c => c.cat === cat);
     if (!items.length) return "";
-    return `<section class="group"><div class="group-head"><span>${CAT_ICON[cat]} ${cat}</span><strong>${brl(items.reduce((s, c) => s + costBrl(c, trip), 0))}</strong></div>
+    return `<section class="group"><div class="group-head"><span>${CAT_ICON[cat]} ${cat}</span><div class="group-total"><strong>${brl(items.reduce((s, c) => s + costBrl(c, trip), 0))}</strong>${trip.travelers.length > 1 ? `<small>${brl(items.reduce((s, c) => s + costBrl(c, trip), 0) / trip.travelers.length)} por pessoa</small>` : ""}</div></div>
       ${items.map(c => {
         const seg = c.segId ? sc.segments.find(s => s.id === c.segId) : null;
         const foreign = c.cur && c.cur !== "BRL";
@@ -404,7 +404,7 @@ function tabCosts(trip, sc) {
         const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", isPerPerson(c, trip) ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
         return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}">
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
-          <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
+          <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${trip.travelers.length > 1 && c.amount ? `<small>${brl(costBrl(c, trip) / trip.travelers.length)} por pessoa${isPerPerson(c, trip) ? "" : " (dividido)"}</small>` : ""}${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
       }).join("")}</section>`;
   }).join("");
   const REMIND = ["Passagens", "Hospedagem", "Transporte", "Passeios", "Alimentação", "Seguro"];
