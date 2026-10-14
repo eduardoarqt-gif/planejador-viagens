@@ -464,7 +464,7 @@ function bookingPrice(b) {
   if (b.amount == null || b.amount === "") return "";
   const cur = (b.cur || "BRL").toUpperCase();
   const base = cur === "BRL" ? brl(b.amount) : `${cur} ${num(b.amount)} (≈ ${brl(b.amount * (b.rate || 1))})`;
-  return `Pago ${base}${b.paidBy && b.paidBy !== "—" ? ` por ${esc(b.paidBy)}` : ""}`;
+  return `Valor ${base}${b.paidBy && b.paidBy !== "—" ? ` por ${esc(b.paidBy)}` : ""}`;
 }
 const bookingBrl = b => (b.amount == null || b.amount === "" ? 0 : Number(b.amount) * (b.rate || 1));
 
@@ -1090,12 +1090,34 @@ const actions = {
   /* custos, roteiro, reservas */
   async "sc-add-item"(el) {
     const sc = findSc(el);
-    const v = await ask("Adicionar item", [{ name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] }], { confirm: "Continuar" });
+    const trip = currentTrip();
+    const v = await ask("Adicionar item", [
+      { name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] },
+      { name: "desc", label: "Descrição (opcional)", placeholder: "Ex.: Gol SP → Natal" },
+      { name: "amount", label: "Valor em reais (opcional)", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Com valor, o item entra direto no orçamento. Sem valor, abre o formulário completo (outra moeda, datas, localizador…)." }
+    ], { confirm: "Continuar" });
     if (!v) return;
     const kind = ITEM_KINDS.find(k => k[0] === v.kind);
-    if (!kind || !kind[1]) { await editCost(sc, null); return; }
+    const label = v.kind.replace(/^\S+\s/, "").replace(/ \(.*\)$/, "");
+    let amount = null;
+    if (v.amount) { amount = money2(v.amount); if (amount == null) return; }
     ui.scenarioId = sc.id;
-    await editBooking(null, { ...kind[1], sc });
+    if (amount == null) {
+      if (!kind || !kind[1]) await editCost(sc, null);
+      else await editBooking(null, { ...kind[1], desc: v.desc.trim(), sc });
+      return;
+    }
+    const desc = v.desc.trim() || label;
+    const cost = { id: uid(), desc, cat: "Outros", amount, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "Estimado", refundable: true };
+    if (kind && kind[1]) {
+      const book = { id: uid(), done: false, type: kind[1].type, desc, amount, cur: "BRL", rate: 1, paidBy: "", date: "", dateEnd: "", locator: "", link: "", attachments: [], costSynced: true };
+      trip.bookings.push(book);
+      cost.bookingId = book.id;
+      cost.cat = BOOKING_CAT[book.type] || "Outros";
+    }
+    sc.costs.push(cost);
+    commit();
+    toast("Item lançado no orçamento.");
   },
   "cost-quick"(el) {
     const sc = findSc(el), cat = el.dataset.cat;
