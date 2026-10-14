@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=25";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=25";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=25";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=25";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=27";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=27";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=27";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=27";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -77,11 +77,11 @@ function scenarioStats(sc, trip) {
   const used = sc.segments.reduce((s, x) => s + x.days, 0);
   const cities = sc.segments.filter(s => !s.transit);
   return {
-    total, used, free: trip.days - used, cities: cities.length,
+    total, used, days: used || trip.days, free: 0, cities: cities.length,
     transitDays: sc.segments.filter(s => s.transit).reduce((s, x) => s + x.days, 0),
     hotelChanges: Math.max(0, cities.length - 1),
     perPerson: total / Math.max(1, trip.travelers.length),
-    perDay: total / Math.max(1, trip.days),
+    perDay: total / Math.max(1, used || trip.days),
     committed: sc.costs.filter(c => c.status !== "Estimado" && c.status !== "A orçar").reduce((s, c) => s + costBrl(c, trip), 0)
   };
 }
@@ -111,7 +111,18 @@ function syncMainDest(t) {
   const first = chosenScenario(t).segments.find(s => !s.transit && s.city && s.city !== "Destino" && s.city !== "A definir");
   if (first) t.destName = first.city;
 }
-const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); }); save(); render(keepScroll); };
+/* A duração da viagem acompanha a rota do cenário escolhido (cada cenário pode ter duração diferente). */
+function syncTripDays(t) {
+  if (t.status === "concluida" || !t.scenarios?.length) return;
+  /* data própria do cenário escolhido vale para a viagem; a data-base é guardada para os outros cenários */
+  const own = chosenScenario(t).start;
+  if (own) { if (t.baseStart == null) t.baseStart = t.start; t.start = own; }
+  else if (t.baseStart != null) { t.start = t.baseStart; delete t.baseStart; }
+  const used = chosenScenario(t).segments.reduce((s, x) => s + x.days, 0);
+  if (used > 0) t.days = used;
+}
+const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); syncTripDays(t); }); save(); render(keepScroll); };
+state.trips.forEach(syncTripDays);
 
 /* ---------- Home ---------- */
 function tripCard(trip) {
@@ -339,9 +350,10 @@ function tabScenarios(trip) {
   const cards = trip.scenarios.map(sc => {
     const st = scenarioStats(sc, trip);
     const chosen = sc.id === trip.chosenId;
-    const diff = st.free;
-    const note = diff === 0 ? `<span class="ok">✓ ${trip.days} dias distribuídos</span>` : diff > 0 ? `<span class="warn">${plural(diff, "dia livre", "dias livres")}</span>` : `<span class="bad">${plural(-diff, "dia", "dias")} acima do período</span>`;
-    const bar = sc.segments.map(s => `<i class="${s.transit ? "transit" : ""}" style="flex:${s.days}" title="${esc(s.city)}"></i>`).join("") + (diff > 0 ? `<i class="free" style="flex:${diff}"></i>` : "");
+    const from = sc.start || trip.baseStart || trip.start;
+    const dates = from && st.used ? ` · ${fmtShort(from)} → ${fmtShort(addDays(from, st.used - 1))}` : "";
+    const note = `<span class="ok">${plural(st.used, "dia", "dias")}${dates}</span>`;
+    const bar = sc.segments.map(s => `<i class="${s.transit ? "transit" : ""}" style="flex:${s.days}" title="${esc(s.city)}"></i>`).join("");
     const rows = sc.segments.map((s, i) => `
       <div class="seg ${s.transit ? "transit" : ""}">
         <button class="seg-name" data-act="seg-edit" data-sc="${sc.id}" data-i="${i}">${s.transit ? "↝ " : ""}${esc(s.city)}</button>
@@ -373,6 +385,7 @@ function tabScenarios(trip) {
         ${chosen ? "" : `<button class="btn primary sm" data-act="sc-choose" data-sc="${sc.id}">Escolher este</button>`}
         <button class="btn ghost sm" data-act="sc-open-costs" data-sc="${sc.id}">Custos</button>
         <button class="btn ghost sm" data-act="sc-dup" data-sc="${sc.id}">Duplicar</button>
+        <button class="btn ghost sm" data-act="sc-dates" data-sc="${sc.id}">Datas</button>
         <button class="btn ghost sm" data-act="sc-rename" data-sc="${sc.id}">Renomear</button>
         ${trip.scenarios.length > 1 ? `<button class="btn ghost sm danger-text" data-act="sc-del" data-sc="${sc.id}">Excluir</button>` : ""}
       </div></article>`;
@@ -390,7 +403,7 @@ function renderCompare(trip) {
       ${row("Total", st => brl(st.total), st => st.total === cheapest)}
       ${row("Por pessoa", st => brl(st.perPerson))}${row("Por dia", st => brl(st.perDay))}
       ${row("Destinos", st => st.cities)}${row("Trocas de hotel", st => st.hotelChanges)}
-      ${row("Dias em deslocamento", st => st.transitDays)}${row("Dias sem destino", st => st.free > 0 ? st.free : "—")}
+      ${row("Dias em deslocamento", st => st.transitDays)}${row("Duração", st => plural(st.used, "dia", "dias"))}${row("Período", (st, sc) => { const f = sc.start || trip.baseStart || trip.start; return f && st.used ? `${fmtShort(f)} → ${fmtShort(addDays(f, st.used - 1))}` : "—"; })}
       ${row("Já reservado/pago", st => brl(st.committed))}
     </tbody></table></div></section>`;
 }
@@ -427,6 +440,7 @@ function tabCosts(trip, sc) {
 /* --- Roteiro --- */
 function tabItinerary(trip) {
   const days = dayList(trip);
+  const orphan = Object.entries(trip.itinerary).filter(([k, list]) => Number(k) >= days.length && list?.length).reduce((n, [, l]) => n + l.length, 0);
   const sc = chosenScenario(trip);
   let last = null;
   const html = days.map((day, i) => {
@@ -436,7 +450,7 @@ function tabItinerary(trip) {
       <div class="day-head"><div><span class="day-n">Dia ${i + 1}</span>${trip.start ? `<span class="muted"> · ${fmtDay(dayISO(trip, i))}</span>` : ""}</div><span class="wx" data-wx="${i}"></span></div>
       ${dayBody(trip, i)}</article>`;
   }).join("");
-  return `${trip.status === "rascunho" ? `<p class="notice">Roteiro do cenário escolhido (<b>${esc(sc.name)}</b>). Ele pode mudar enquanto a viagem for rascunho.</p>` : ""}
+  return `${orphan ? `<p class="notice">${orphan} ${orphan === 1 ? "atividade está" : "atividades estão"} em dias além da rota atual. Ficam guardadas e voltam se a rota ganhar esses dias.</p>` : ""}${trip.status === "rascunho" ? `<p class="notice">Roteiro do cenário escolhido (<b>${esc(sc.name)}</b>). Ele pode mudar enquanto a viagem for rascunho.</p>` : ""}
     ${!trip.start ? `<p class="notice">Defina a data de saída nas opções da viagem para ver previsão do tempo e reservas por dia.</p>` : ""}
     <div class="days">${html}</div>`;
 }
@@ -1024,7 +1038,8 @@ const actions = {
         { name: "country", label: "País", value: trip.country },
         { name: "destName", label: "Destino principal", value: trip.destName, hint: "Liga a viagem ao banco de destinos e às estatísticas." }
       ] : [{ name: "_dest", type: "note", label: "País e destino ficam em cada destino da rota (aba Cenários → + Destino / tocar no nome)." }]),
-      { name: "days", label: "Duração (dias)", type: "number", value: trip.days, min: 1 },
+      ...(trip.status === "concluida" ? [{ name: "days", label: "Duração (dias)", type: "number", value: trip.days, min: 1 }]
+        : [{ name: "_days", type: "note", label: `Duração: ${plural(trip.days, "dia", "dias")} — vem da rota do cenário escolhido (cada cenário pode ter a sua).` }]),
       { name: "start", label: "Data de saída", type: "date", value: trip.start },
       { name: "travelers", label: "Viajantes", value: trip.travelers.join(", ") },
       { name: "status", label: "Situação", type: "select", options: Object.values(TRIP_STATUS), value: TRIP_STATUS[trip.status] },
@@ -1035,9 +1050,10 @@ const actions = {
     if (v.del) { removeItem("trips", trip.id); location.hash = "#/"; return; }
     Object.assign(trip, {
       name: v.name.trim() || trip.name, country: v.country != null ? v.country.trim() : trip.country, destName: v.destName != null ? v.destName.trim() : trip.destName,
-      days: Math.max(1, Number(v.days) || trip.days), start: v.start, travelers: parseNames(v.travelers),
+      days: v.days != null ? Math.max(1, Number(v.days) || trip.days) : trip.days, start: v.start, travelers: parseNames(v.travelers),
       status: statusKey(v.status) || trip.status, wouldRepeat: v.wouldRepeat
     });
+    if (chosenScenario(trip).start) chosenScenario(trip).start = v.start;
     commit();
   },
   backup() {
@@ -1082,6 +1098,15 @@ const actions = {
     sc.name = `${src.name} (cópia)`;
     trip.scenarios.push(sc);
     commit(); toast("Cenário duplicado.");
+  },
+  async "sc-dates"(el) {
+    const sc = findSc(el), trip = currentTrip();
+    const v = await ask(`Datas · ${sc.name}`, [
+      { name: "start", label: "Data de saída deste cenário", type: "date", value: sc.start || trip.baseStart || trip.start, hint: "Deixe igual à da viagem se não mudar. A volta é calculada pelos dias da rota." }
+    ]);
+    if (!v) return;
+    if (v.start && v.start !== (trip.baseStart || trip.start)) sc.start = v.start; else delete sc.start;
+    commit();
   },
   async "sc-rename"(el) {
     const sc = findSc(el);
