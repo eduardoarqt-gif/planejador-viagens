@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=33";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=33";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=33";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=33";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=34";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=34";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=34";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=34";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -112,6 +112,9 @@ function syncMainDest(t) {
   if (t.status === "concluida" || !t.scenarios?.length) return;
   const first = chosenScenario(t).segments.find(s => !s.transit && s.city && s.city !== "Destino" && s.city !== "A definir");
   if (first) t.destName = first.city;
+  /* o Dudoo Life lê trip.country: mantém o texto com os países dos destinos da rota (se houver) */
+  const cs = [...new Set(chosenScenario(t).segments.filter(x => !x.transit && x.country).map(x => x.country.trim()))];
+  if (cs.length) t.country = cs.join(", ");
 }
 /* A duração da viagem acompanha a rota do cenário escolhido (cada cenário pode ter duração diferente). */
 function syncTripDays(t) {
