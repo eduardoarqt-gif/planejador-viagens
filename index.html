@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, minimum-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#EFEEEA">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Dudoo Trips">
@@ -12,6 +12,18 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="styles.css?v=34">
   <title>Dudoo Trips</title>
+<script>
+/* Sem zoom por duplo toque (17/10/2026): o iOS ignora user-scalable, então segura o 2º toque em áreas que não são botão/campo. */
+(function () {
+  var ultimo = 0;
+  document.addEventListener("touchend", function (e) {
+    var t = Date.now();
+    if (t - ultimo < 350 && !(e.target.closest && e.target.closest("button,a,input,textarea,select,label,summary,[data-acao],[role=button]"))) e.preventDefault();
+    ultimo = t;
+  }, { passive: false });
+  document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
+})();
+</script>
 </head>
 <body>
   <div id="app"></div>

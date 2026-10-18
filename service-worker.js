@@ -1,4 +1,4 @@
-const CACHE = "planejador-viagens-v34";
+const CACHE = "planejador-viagens-v35";
 const ASSETS = ["./", "./index.html", "./styles.css?v=34", "./app.js?v=34", "./core.js?v=34", "./data.js?v=34", "./ui.js?v=34", "./services.js?v=34", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", event => {
