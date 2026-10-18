@@ -1,4 +1,4 @@
-import { prepareFile, storeFile } from "./data.js?v=34";
+import { prepareFile, storeFile } from "./data.js?v=36";
 
 export const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 export const brl = value => money.format(value || 0);
@@ -49,7 +49,7 @@ export function ask(title, fields, { confirm = "Salvar", danger = false } = {}) 
           <label class="btn soft sm">+ Arquivo ou foto<input type="file" multiple accept="image/*,application/pdf" hidden></label>
           <small class="hint">Dica: copie um print e cole aqui com Ctrl+V.</small></div>`);
       }
-      const attrs = f.type === "money" ? 'inputmode="decimal" autocomplete="off"' : "";
+      const attrs = f.type === "money" ? 'inputmode="decimal" autocomplete="off" data-mascara="dinheiro"' : "";
       const type = f.type === "money" ? "text" : f.type || "text";
       return wrap(f, `<label>${esc(f.label)}<input type="${type}" name="${f.name}" value="${esc(f.value ?? "")}" placeholder="${esc(f.placeholder || "")}" ${f.required ? "required" : ""} ${f.min != null ? `min="${f.min}"` : ""} ${f.step ? `step="${f.step}"` : ""} ${attrs}></label>${f.hint ? `<small class="hint">${esc(f.hint)}</small>` : ""}`);
     }).join("");
