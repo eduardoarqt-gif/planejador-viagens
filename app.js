@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=36";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=36";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=36";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=36";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=37";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=37";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=37";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=37";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -27,6 +27,8 @@ const route = () => location.hash.replace(/^#\/?/, "").split("/");
 const currentTrip = () => { const r = route(); return r[0] === "t" ? state.trips.find(t => t.id === r[1]) : null; };
 const currentDest = () => { const r = route(); return r[0] === "d" ? state.destinations.find(d => d.id === r[1]) : null; };
 const chosenScenario = trip => trip.scenarios.find(s => s.id === trip.chosenId) || trip.scenarios[0];
+/* Cenários em uso: os arquivados (depois de "Confirmar viagem") ficam guardados à parte. */
+const liveScenarios = trip => trip.scenarios.filter(s => !s.archived || s.id === trip.chosenId);
 const normName = x => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 /** Trecho da rota (cenário escolhido primeiro) que corresponde à cidade. */
 const segOfCity = (trip, city) => {
@@ -299,7 +301,7 @@ function renderTrip(trip) {
       <h1>${esc(trip.name)}</h1>
       <p class="muted">${[tripCountries(trip).join(", "), dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
       <div class="kpis">
-        <div><small>${trip.scenarios.length > 1 ? `Total · ${esc(official.name)} ✓` : "Total"}</small><strong>${brl(st.total)}</strong></div>
+        <div><small>${liveScenarios(trip).length > 1 ? `Total · ${esc(official.name)} ✓` : "Total"}</small><strong>${brl(st.total)}</strong></div>
         <div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div>
         <div><small>Por dia</small><strong>${brl(st.perDay)}</strong></div>
       </div>
@@ -353,7 +355,7 @@ function tabHoje(trip) {
 
 /* --- Cenários --- */
 function tabScenarios(trip) {
-  const cards = trip.scenarios.map(sc => {
+  const cards = liveScenarios(trip).map(sc => {
     const st = scenarioStats(sc, trip);
     const chosen = sc.id === trip.chosenId;
     const from = trip.lockPeriod ? trip.start : (sc.start || trip.baseStart || trip.start);
@@ -390,19 +392,27 @@ function tabScenarios(trip) {
         <div><dt>Destinos</dt><dd>${st.cities}</dd></div><div><dt>Trocas de hotel</dt><dd>${st.hotelChanges}</dd></div>
       </dl>
       <div class="card-actions">
-        ${chosen ? "" : `<button class="btn primary sm" data-act="sc-choose" data-sc="${sc.id}">Escolher este</button>`}
+        ${chosen ? (trip.status === "rascunho" ? `<button class="btn primary sm" data-act="trip-confirm">✓ Confirmar viagem</button>` : trip.status === "planejada" ? `<button class="btn ghost sm" data-act="trip-reopen">Voltar a rascunho</button>` : "") : `<button class="btn primary sm" data-act="sc-choose" data-sc="${sc.id}">Escolher este</button>`}
         <button class="btn ghost sm" data-act="sc-open-costs" data-sc="${sc.id}">Custos</button>
         <button class="btn ghost sm" data-act="sc-dup" data-sc="${sc.id}">Duplicar</button>
         ${trip.lockPeriod ? "" : `<button class="btn ghost sm" data-act="sc-dates" data-sc="${sc.id}">Datas</button>`}
         <button class="btn ghost sm" data-act="sc-rename" data-sc="${sc.id}">Renomear</button>
-        ${trip.scenarios.length > 1 ? `<button class="btn ghost sm danger-text" data-act="sc-del" data-sc="${sc.id}">Excluir</button>` : ""}
+        ${liveScenarios(trip).length > 1 ? `<button class="btn ghost sm danger-text" data-act="sc-del" data-sc="${sc.id}">Excluir</button>` : ""}
       </div></article>`;
   }).join("");
   return `<div class="section-head"><p class="muted">Monte rotas diferentes dentro do mesmo período e compare lado a lado.</p><button class="btn soft" data-act="sc-new">+ Novo cenário</button></div>
-    <div class="cards">${cards}</div>${trip.scenarios.length > 1 ? renderCompare(trip) : ""}`;
+    <div class="cards">${cards}</div>${liveScenarios(trip).length > 1 ? renderCompare(trip) : ""}${archivedList(trip)}`;
+}
+function archivedList(trip) {
+  const list = trip.scenarios.filter(s => s.archived && s.id !== trip.chosenId);
+  if (!list.length) return "";
+  return `<h3 class="sub">Cenários arquivados</h3><div class="card list">${list.map(sc => {
+    const st = scenarioStats(sc, trip);
+    return `<div class="row"><div><strong>${esc(sc.name)}</strong><small>${plural(st.used, "dia", "dias")} · ${sc.segments.filter(x => !x.transit).map(x => esc(x.city)).join(" → ")}</small></div><div class="row-right"><b>${brl(st.total)}</b><span class="inline-actions"><button class="btn ghost sm" data-act="sc-restore" data-sc="${sc.id}">Restaurar</button><button class="btn ghost sm danger-text" data-act="sc-del" data-sc="${sc.id}">Excluir</button></span></div></div>`;
+  }).join("")}</div>`;
 }
 function renderCompare(trip) {
-  const stats = trip.scenarios.map(sc => ({ sc, st: scenarioStats(sc, trip) }));
+  const stats = liveScenarios(trip).map(sc => ({ sc, st: scenarioStats(sc, trip) }));
   const cheapest = Math.min(...stats.map(x => x.st.total));
   const row = (label, fn, best) => `<tr><th>${label}</th>${stats.map(({ sc, st }) => `<td class="${best && best(st) ? "best" : ""}">${fn(st, sc)}</td>`).join("")}</tr>`;
   return `<section class="card compare"><h2>Comparação</h2><div class="table-scroll"><table>
@@ -419,7 +429,7 @@ function renderCompare(trip) {
 /* --- Custos --- */
 function tabCosts(trip, sc) {
   const st = scenarioStats(sc, trip);
-  const picker = trip.scenarios.length > 1 ? `<div class="chips scroll">${trip.scenarios.map(s => `<button class="chip-btn ${s.id === sc.id ? "active" : ""}" data-act="sc-view" data-sc="${s.id}">${esc(s.name)}${s.id === trip.chosenId ? " ✓" : ""}</button>`).join("")}</div>` : "";
+  const picker = liveScenarios(trip).length > 1 ? `<div class="chips scroll">${liveScenarios(trip).map(s => `<button class="chip-btn ${s.id === sc.id ? "active" : ""}" data-act="sc-view" data-sc="${s.id}">${esc(s.name)}${s.id === trip.chosenId ? " ✓" : ""}</button>`).join("")}</div>` : "";
   const groups = CATEGORIES.map(cat => {
     const items = sc.costs.filter(c => c.cat === cat);
     if (!items.length) return "";
@@ -687,6 +697,7 @@ const findSc = el => currentTrip().scenarios.find(s => s.id === el.dataset.sc);
 const findSeg = el => findSc(el).segments[Number(el.dataset.i)];
 function cloneScenario(src) {
   const copy = structuredClone(src);
+  delete copy.archived;
   const idMap = {};
   copy.id = uid();
   copy.segments.forEach(s => { const old = s.id; s.id = uid(); idMap[old] = s.id; });
@@ -1146,7 +1157,25 @@ const actions = {
     if (ui.scenarioId === sc.id) ui.scenarioId = null;
     commit();
   },
-  "sc-choose"(el) { currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
+  "sc-restore"(el) { const sc = findSc(el); delete sc.archived; commit(); toast("Cenário restaurado."); },
+  async "trip-confirm"() {
+    const trip = currentTrip();
+    const sc = chosenScenario(trip);
+    const others = liveScenarios(trip).filter(x => x.id !== sc.id);
+    const st = scenarioStats(sc, trip);
+    const v = await ask("Confirmar viagem", [
+      { name: "_n", type: "note", label: `Tornar oficial: ${sc.name} — ${plural(st.used, "dia", "dias")}, ${brl(st.total)} (${brl(st.perPerson)} por pessoa).${trip.start ? "" : " Falta definir a data de saída (Opções da viagem)."}` },
+      ...(others.length ? [{ name: "arch", label: `Arquivar os outros ${others.length === 1 ? "cenário" : others.length + " cenários"} (ficam guardados para consulta)`, type: "checkbox", value: true }] : [])
+    ], { confirm: "Confirmar" });
+    if (!v) return;
+    trip.status = "planejada";
+    if (v.arch) others.forEach(x => { x.archived = true; });
+    ui.scenarioId = null;
+    commit();
+    toast("Viagem confirmada.");
+  },
+  "trip-reopen"() { currentTrip().status = "rascunho"; commit(); toast("Voltou a rascunho."); },
+  "sc-choose"(el) { const pick = findSc(el); delete pick.archived; currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
   "sc-view"(el) { ui.scenarioId = el.dataset.sc; render(); },
   "sc-open-costs"(el) { ui.scenarioId = el.dataset.sc; ui.tab = "custos"; render(); },
   "seg-days"(el) { const seg = findSeg(el); seg.days = Math.max(1, seg.days + Number(el.dataset.d)); commit(true); },
