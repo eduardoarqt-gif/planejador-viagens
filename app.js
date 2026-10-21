@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=38";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=38";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=38";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=38";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=39";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=39";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=39";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=39";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -325,13 +325,25 @@ function cancelTag(b) {
   const left = diffDays(b.freeCancelUntil, todayISO());
   return `<span class="tag ${left < 0 ? "Pago" : left <= 7 ? "Estimado" : "Reservado"}">${left < 0 ? "cancelamento grátis expirou" : `cancela grátis até ${fmtShort(b.freeCancelUntil)}`}</span>`;
 }
+/* Hotéis cadastrados entram sozinhos no roteiro: entrada no dia do check-in, saída no dia do check-out. */
+function hotelItems(trip, i) {
+  if (!trip.start) return [];
+  const d = dayISO(trip, i);
+  const out = [];
+  for (const b of trip.bookings) {
+    if (b.type !== "Hotel" || !b.date) continue;
+    if (b.date === d) out.push({ hotel: true, bid: b.id, time: b.checkinTime || "", title: `Check-in · ${b.desc}`, note: b.locator ? `Localizador ${b.locator}` : "" });
+    if (b.dateEnd && b.dateEnd === d) out.push({ hotel: true, bid: b.id, time: b.checkoutTime || "", title: `Check-out · ${b.desc}`, note: "" });
+  }
+  return out;
+}
 function dayBody(trip, i) {
-  const items = (trip.itinerary[i] || []).slice().sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
+  const items = [...(trip.itinerary[i] || []), ...hotelItems(trip, i)].sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   const places = trip.places.filter(p => p.day === i);
   const res = bookingsForDay(trip, i);
-  return `${items.length ? `<ul class="acts">${items.map(a => `<li><button data-act="act-edit" data-day="${i}" data-id="${a.id}">
+  return `${items.length ? `<ul class="acts">${items.map(a => `<li><button ${a.hotel ? `data-act="book-edit" data-id="${a.bid}"` : `data-act="act-edit" data-day="${i}" data-id="${a.id}"`}>
         <span class="time">${esc(a.time || "—")}</span>
-        <span class="act-main"><strong>${esc(a.title)}</strong>${a.note ? `<small>${esc(a.note)}</small>` : ""}</span>
+        <span class="act-main"><strong>${a.hotel ? "🛏️ " : ""}${esc(a.title)}</strong>${a.note ? `<small>${esc(a.note)}</small>` : ""}</span>
         ${a.cost ? `<span class="act-cost">${brl(a.cost)}</span>` : ""}</button></li>`).join("")}</ul>` : `<p class="muted tiny">Sem atividades.</p>`}
     ${places.length ? `<div class="day-places"><b>Atrações no mapa</b>${places.map((p, n) => `<span>${n + 1}. ${esc(p.name)}</span>`).join("")}</div>` : ""}
     <div class="inline-actions"><button class="btn soft sm" data-act="act-add" data-day="${i}">+ Atividade</button><button class="btn ghost sm" data-act="map-day" data-day="${i}">Mapa do dia</button></div>
@@ -802,7 +814,9 @@ async function editBooking(b, pre = {}) {
     { name: "cur", label: "Moeda do valor", type: "select", options: curOptions(b?.cur), value: b?.cur || "BRL", hint: "O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
+    { name: "checkinTime", label: "Horário de entrada (check-in)", type: "time", value: b?.checkinTime, showIf: ["type", "Hotel"] },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
+    { name: "checkoutTime", label: "Horário de saída (check-out)", type: "time", value: b?.checkoutTime, showIf: ["type", "Hotel"] },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
     { name: "confirmed", label: "Confirmação recebida", type: "checkbox", value: !!b?.confirmed },
     { name: "checkin", label: "Check-in online", type: "select", options: CHECKIN, value: b?.checkin || CHECKIN[0], showIf: ["type", "Voo"] },
@@ -829,6 +843,7 @@ async function editBooking(b, pre = {}) {
   }
   const data = {
     amount, cur, rate, paidBy: v.paidBy === "—" ? "" : v.paidBy,
+    checkinTime: v.type === "Hotel" ? (v.checkinTime || "") : (b?.checkinTime || ""), checkoutTime: v.type === "Hotel" ? (v.checkoutTime || "") : (b?.checkoutTime || ""),
     confirmed: v.confirmed, checkin: v.type === "Voo" && v.checkin !== CHECKIN[0] ? v.checkin : "",
     seat: v.type === "Voo" ? (v.seat || "").trim() : (b?.seat || ""), baggage: v.type === "Voo" ? (v.baggage || "").trim() : (b?.baggage || ""),
     supplier: (v.supplier || "").trim(), notes: (v.notes || "").trim(),
@@ -1397,11 +1412,11 @@ const actions = {
     const t = d.transport || {};
     const v = await ask("Transporte", [
       { name: "use", label: "O que usar", value: t.use, placeholder: "Ex.: metrô e a pé" },
-      { name: "car", label: "Vale a pena alugar carro?", type: "select", options: ["—", "Sim, vale", "Não vale", "Depende do roteiro"], value: t.car || "—" },
-      { name: "metro", label: "Tem metrô?", type: "select", options: ["—", "Sim", "Não", "Só em parte"], value: t.metro || "—" },
+      { name: "car", label: "Vale a pena alugar carro?", type: "checkbox", value: /^sim/i.test(t.car || "") },
+      { name: "metro", label: "Tem metrô?", type: "checkbox", value: /^sim/i.test(t.metro || "") },
       { name: "notes", label: "Notas", type: "textarea", value: t.notes }
     ]);
-    if (v) { d.transport = { use: v.use.trim(), car: v.car === "—" ? "" : v.car, metro: v.metro === "—" ? "" : v.metro, notes: v.notes.trim() }; commit(true); }
+    if (v) { d.transport = { use: v.use.trim(), car: v.car ? "Sim" : (t.car ? "Não" : ""), metro: v.metro ? "Sim" : (t.metro ? "Não" : ""), notes: v.notes.trim() }; commit(true); }
   },
   async "dest-edit-lodging"(el) {
     const d = destById(el.dataset.id);
