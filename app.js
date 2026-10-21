@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=37";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=37";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=37";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=37";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=38";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=38";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=38";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=38";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -283,12 +283,17 @@ function renderDestPage(d) {
 }
 
 /* ---------- Viagem ---------- */
+/* Viagem confirmada (não é mais rascunho/desejo): a tela inicial é o Roteiro. */
+const isOfficial = trip => ["planejada", "andamento", "concluida"].includes(trip.status);
 function renderTrip(trip) {
   const sc = activeScenario(trip);
   const official = chosenScenario(trip);
   const st = scenarioStats(official, trip);
   const isActive = activeDayIndex(trip) != null;
-  const tabs = [...(isActive ? [["hoje", "Hoje"]] : []), ["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["reservas", "Reservas"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]];
+  const confirmed = isOfficial(trip);
+  const tabs = [...(isActive ? [["hoje", "Hoje"]] : []),
+    ...(confirmed ? [["roteiro", "Roteiro"], ["reservas", "Reservas"], ["custos", "Custos"], ["mapa", "Mapa"], ["despesas", "Despesas"], ["bagagem", "Bagagem"], ["cenarios", "Cenários"]]
+      : [["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["reservas", "Reservas"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]])];
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
   const content = { hoje: tabHoje, cenarios: tabScenarios, custos: tabCosts, roteiro: tabItinerary, mapa: tabMap, reservas: tabBookings, despesas: tabExpenses, bagagem: tabChecklist }[ui.tab](trip, sc);
   const dateLine = trip.start ? `${fmtDay(dayISO(trip, 0))} → ${fmtDay(dayISO(trip, trip.days - 1))}` : "Sem data definida";
@@ -671,7 +676,7 @@ function render(keepScroll = false) {
   const trip = currentTrip();
   const dest = currentDest();
   if ((r[0] === "t" && !trip) || (r[0] === "d" && !dest)) { location.hash = "#/"; return; }
-  if (trip && ui.tripId !== trip.id) { ui.tripId = trip.id; ui.tab = activeDayIndex(trip) != null ? "hoje" : "cenarios"; ui.hojeDay = null; ui.mapCity = ""; ui.mapDay = ""; }
+  if (trip && ui.tripId !== trip.id) { ui.tripId = trip.id; ui.tab = activeDayIndex(trip) != null ? "hoje" : isOfficial(trip) ? "roteiro" : "cenarios"; ui.hojeDay = null; ui.mapCity = ""; ui.mapDay = ""; }
   app.innerHTML = trip ? renderTrip(trip) : dest ? renderDestPage(dest) : renderHome();
   if (!keepScroll) window.scrollTo(0, 0);
   updateStatus(getStatus());
@@ -1171,10 +1176,11 @@ const actions = {
     trip.status = "planejada";
     if (v.arch) others.forEach(x => { x.archived = true; });
     ui.scenarioId = null;
+    ui.tab = "roteiro";
     commit();
     toast("Viagem confirmada.");
   },
-  "trip-reopen"() { currentTrip().status = "rascunho"; commit(); toast("Voltou a rascunho."); },
+  "trip-reopen"() { currentTrip().status = "rascunho"; ui.tab = "cenarios"; commit(); toast("Voltou a rascunho."); },
   "sc-choose"(el) { const pick = findSc(el); delete pick.archived; currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
   "sc-view"(el) { ui.scenarioId = el.dataset.sc; render(); },
   "sc-open-costs"(el) { ui.scenarioId = el.dataset.sc; ui.tab = "custos"; render(); },
