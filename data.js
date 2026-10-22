@@ -129,6 +129,26 @@ const b64encode = text => {
   new TextEncoder().encode(text).forEach(b => { bin += String.fromCharCode(b); });
   return btoa(bin);
 };
+/* Lugares do Dudoo Life (repositório privado dudoolife-dados). Somente leitura; usa o mesmo token da sincronização. */
+const LIFE_KEY = "planejador-life-lugares";
+export async function getLifePlaces() {
+  const cached = (() => { try { return JSON.parse(localStorage.getItem(LIFE_KEY)); } catch { return null; } })();
+  if (!syncToken()) { if (cached) return { itens: cached.itens, at: cached.at, offline: true }; throw new Error("Cole o token de sincronização (⋯ na tela inicial) para ler os lugares do Dudoo Life."); }
+  try {
+    const res = await fetch("https://api.github.com/repos/eduardoarqt-gif/dudoolife-dados/contents/dados/lugares.json", { cache: "no-store", headers: authHeaders() });
+    if (res.status === 404 || res.status === 403) throw new Error("O token não enxerga o repositório dudoolife-dados. Gere um token com acesso aos dois repositórios (viagens-dados e dudoolife-dados).");
+    if (!res.ok) throw new Error(`GitHub respondeu ${res.status}.`);
+    const file = await res.json();
+    const itens = (JSON.parse(b64decode(file.content)).itens || []).filter(p => !p.excluido_em);
+    const at = Date.now();
+    try { localStorage.setItem(LIFE_KEY, JSON.stringify({ at, itens })); } catch { /* sem cache */ }
+    return { itens, at };
+  } catch (err) {
+    if (cached) return { itens: cached.itens, at: cached.at, offline: true };
+    throw err;
+  }
+}
+
 const authHeaders = extra => ({ Authorization: `Bearer ${syncToken()}`, Accept: "application/vnd.github+json", ...extra });
 const api = (path, init = {}) => fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, { cache: "no-store", ...init, headers: authHeaders(init.headers) });
 
