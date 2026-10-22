@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=43";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=43";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=43";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=43";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=44";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=44";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=44";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=44";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1037,6 +1037,69 @@ const tripForAction = el => state.trips.find(t => t.id === el?.dataset?.trip) ||
 const placeById = id => currentTrip().places.find(p => p.id === id);
 const destById = id => state.destinations.find(d => d.id === id);
 
+/* + Lugar do Life: lê os lugares do Dudoo Life, filtra e coloca no dia. Sempre explica o que achou (nada de falha silenciosa). */
+async function lifePick(el) {
+  const trip = currentTrip();
+  const day = Number(el.dataset.day);
+  const city = dayList(trip)[day]?.city || "";
+  let data;
+  try { toast("Buscando lugares do Dudoo Life…"); data = await getLifePlaces(); }
+  catch (err) { await ask("Lugares do Life", [{ name: "_e", type: "note", label: err.message || "Não consegui ler os lugares do Life." }], { confirm: "OK" }); return; }
+  const all = data.itens || [];
+  const quando = data.at ? new Date(data.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  const origem = `${plural(all.length, "lugar", "lugares")} no Dudoo Life · ${data.offline ? `cópia salva em ${quando} (sem internet ou sem acesso)` : `lido agora (${quando})`}`;
+  if (!all.length) { await ask("Lugares do Life", [{ name: "_e", type: "note", label: `Nenhum lugar encontrado no Dudoo Life. ${origem}. Os lugares do computador só chegam aqui depois que o Dudoo Life sincroniza com o GitHub (Configurações → iPhone e nuvem).` }], { confirm: "OK" }); return; }
+  const cityKey = normName(String(city).split(",")[0]);
+  const cities = [...new Set(all.map(p => String(p.cidade || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt"));
+  const hereLabel = cityKey && cityKey !== "a definir" ? `Cidade do dia: ${city}` : "Todas as cidades";
+  const f = await ask(`Lugares do Life · Dia ${day + 1}`, [
+    { name: "_o", type: "note", label: origem },
+    { name: "city", label: "Cidade", type: "select", options: [hereLabel, "Todas as cidades", ...cities].filter((x, i, a) => a.indexOf(x) === i), value: hereLabel },
+    { name: "st", label: "Situação", type: "select", options: ["Todos (inclui visitados)", "Quero conhecer e favoritos", "Só visitados"], value: "Todos (inclui visitados)" },
+    { name: "cat", label: "Categoria", type: "select", options: ["Todas", ...Object.values(LIFE_CAT).map(c => c[1])], value: "Todas" },
+    { name: "q", label: "Buscar pelo nome (opcional)", placeholder: "Ex.: japonês" }
+  ], { confirm: "Ver lugares" });
+  if (!f) return;
+  const wantCat = Object.entries(LIFE_CAT).find(([, c]) => c[1] === f.cat)?.[0];
+  const q = normName(f.q || "");
+  const list = all.filter(p => {
+    if (f.city === hereLabel && hereLabel !== "Todas as cidades") { const pc = normName(p.cidade); if (!pc || !(cityKey.includes(pc) || pc.includes(cityKey))) return false; }
+    else if (f.city !== "Todas as cidades" && f.city !== hereLabel && p.cidade !== f.city) return false;
+    if (f.st === "Quero conhecer e favoritos" && p.status === "visitado") return false;
+    if (f.st === "Só visitados" && p.status !== "visitado") return false;
+    if (wantCat && p.categoria !== wantCat) return false;
+    if (q && !normName(`${p.nome || ""} ${p.notas || ""} ${p.cidade || ""} ${p.culinaria || ""}`).includes(q)) return false;
+    return true;
+  }).sort((a, b) => String(a.cidade || "").localeCompare(String(b.cidade || ""), "pt") || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+  if (!list.length) {
+    const outras = cities.slice(0, 8).join(", ");
+    await ask("Lugares do Life", [{ name: "_e", type: "note", label: `Nenhum lugar com esses filtros. ${origem}.${outras ? ` Cidades no Life: ${outras}${cities.length > 8 ? "…" : ""}.` : ""} Tente "Todas as cidades".` }], { confirm: "OK" });
+    return;
+  }
+  const labels = list.map((p, n) => `${(LIFE_CAT[p.categoria] || LIFE_CAT.outro)[0]} ${p.nome}${p.culinaria ? ` · ${p.culinaria}` : ""}${p.cidade ? ` — ${p.cidade}` : ""}${p.status === "favorito" ? " ★" : ""}${p.status === "visitado" ? " (visitado)" : ""} ·${n + 1}`);
+  const pick = await ask(`Escolha os lugares (${list.length})`, [
+    { name: "sel", label: "Marque o que entra no Dia " + (day + 1), type: "checks", options: labels, value: [] }
+  ], { confirm: "Adicionar ao roteiro" });
+  if (!pick || !pick.sel.length) return;
+  const dayCity = city && city !== "A definir" ? city : "";
+  let n = 0;
+  for (const label of pick.sel) {
+    const p = list[labels.indexOf(label)];
+    if (!p) continue;
+    const act = (trip.itinerary[day] ||= []);
+    if (act.some(a => a.lifeId === p.id)) continue;
+    const cat = (LIFE_CAT[p.categoria] || LIFE_CAT.outro)[1];
+    const note = [cat, p.culinaria || "", p.instagram ? `Instagram ${p.instagram}` : "", p.link_maps, p.notas].filter(Boolean).join(" · ");
+    act.push({ id: uid(), time: "", title: p.nome, cost: 0, note, lifeId: p.id });
+    if (p.lat != null && p.lon != null && !trip.places.some(x => x.lifeId === p.id)) {
+      trip.places.push({ id: uid(), name: p.nome, city: dayCity || p.cidade || "", lat: p.lat, lon: p.lon, day, visited: false, lifeId: p.id });
+    }
+    n += 1;
+  }
+  commit(true);
+  toast(n ? `${n} ${n === 1 ? "lugar adicionado" : "lugares adicionados"} ao Dia ${day + 1}.` : "Esses lugares já estavam no dia.");
+}
+
 const actions = {
   /* viagens */
   async "new-trip"() {
@@ -1430,57 +1493,8 @@ const actions = {
   async "dest-add"() { await editDest(null); },
   async "dest-menu"(el) { await editDest(destById(el.dataset.id)); },
   async "life-pick"(el) {
-    const trip = currentTrip();
-    const day = Number(el.dataset.day);
-    const city = dayList(trip)[day]?.city || "";
-    let data;
-    try { toast("Buscando lugares do Dudoo Life…"); data = await getLifePlaces(); } catch (err) { toast(err.message || "Não consegui ler os lugares do Life."); return; }
-    const all = data.itens;
-    if (!all.length) { toast("Nenhum lugar cadastrado no Dudoo Life."); return; }
-    const cityKey = normName(city.split(",")[0]);
-    const cities = [...new Set(all.map(p => (p.cidade || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt"));
-    const hereLabel = cityKey && cityKey !== "a definir" ? `Cidade do dia: ${city}` : "Todas as cidades";
-    const f = await ask(`Lugares do Life · Dia ${day + 1}`, [
-      { name: "city", label: "Cidade", type: "select", options: [hereLabel, "Todas as cidades", ...cities].filter((x, i, a) => a.indexOf(x) === i), value: hereLabel },
-      { name: "st", label: "Situação", type: "select", options: ["Todos (inclui visitados)", "Quero conhecer e favoritos", "Só visitados"], value: "Todos (inclui visitados)" },
-      { name: "cat", label: "Categoria", type: "select", options: ["Todas", ...Object.values(LIFE_CAT).map(c => c[1])], value: "Todas" },
-      { name: "q", label: "Buscar pelo nome (opcional)", placeholder: "Ex.: japonês" }
-    ], { confirm: "Ver lugares" });
-    if (!f) return;
-    const wantCat = Object.entries(LIFE_CAT).find(([, c]) => c[1] === f.cat)?.[0];
-    const q = normName(f.q || "");
-    const list = all.filter(p => {
-      if (f.city === hereLabel && hereLabel !== "Todas as cidades") { const pc = normName(p.cidade); if (!pc || !(cityKey.includes(pc) || pc.includes(cityKey))) return false; }
-      else if (f.city !== "Todas as cidades" && f.city !== hereLabel && p.cidade !== f.city) return false;
-      if (f.st === "Quero conhecer e favoritos" && p.status === "visitado") return false;
-      if (f.st === "Só visitados" && p.status !== "visitado") return false;
-      if (wantCat && p.categoria !== wantCat) return false;
-      if (q && !normName(`${p.nome} ${p.notas || ""} ${p.cidade || ""}`).includes(q)) return false;
-      return true;
-    }).sort((a, b) => (a.cidade || "").localeCompare(b.cidade || "", "pt") || a.nome.localeCompare(b.nome, "pt"));
-    if (!list.length) { toast("Nenhum lugar com esses filtros. Tente \"Todas as cidades\"."); return; }
-    const labels = list.map((p, n) => `${(LIFE_CAT[p.categoria] || LIFE_CAT.outro)[0]} ${p.nome}${p.cidade ? ` — ${p.cidade}` : ""}${p.status === "favorito" ? " ★" : ""}${p.status === "visitado" ? " (visitado)" : ""} ·${n + 1}`);
-    const pick = await ask(`Escolha os lugares (${list.length})${data.offline ? " · cópia salva, sem internet" : ""}`, [
-      { name: "sel", label: "Marque o que entra no Dia " + (day + 1), type: "checks", options: labels, value: [] }
-    ], { confirm: "Adicionar ao roteiro" });
-    if (!pick || !pick.sel.length) return;
-    const dayCity = city && city !== "A definir" ? city : "";
-    let n = 0;
-    for (const label of pick.sel) {
-      const p = list[labels.indexOf(label)];
-      if (!p) continue;
-      const act = (trip.itinerary[day] ||= []);
-      if (act.some(a => a.lifeId === p.id)) continue;
-      const cat = (LIFE_CAT[p.categoria] || LIFE_CAT.outro)[1];
-      const note = [cat, p.instagram ? `Instagram ${p.instagram}` : "", p.link_maps, p.notas].filter(Boolean).join(" · ");
-      act.push({ id: uid(), time: "", title: p.nome, cost: 0, note, lifeId: p.id });
-      if (p.lat != null && p.lon != null && !trip.places.some(x => x.lifeId === p.id)) {
-        trip.places.push({ id: uid(), name: p.nome, city: dayCity || p.cidade || "", lat: p.lat, lon: p.lon, day, visited: false, lifeId: p.id });
-      }
-      n += 1;
-    }
-    commit(true);
-    toast(n ? `${n} ${n === 1 ? "lugar adicionado" : "lugares adicionados"} ao Dia ${day + 1}.` : "Esses lugares já estavam no dia.");
+    try { await lifePick(el); }
+    catch (err) { console.error(err); await ask("Lugares do Life", [{ name: "_e", type: "note", label: `Algo deu errado: ${err?.message || err}` }], { confirm: "OK" }); }
   },
   "dest-repeat"(el) { destById(el.dataset.id).repeat = el.checked; save(); },
   "dest-flag"(el) { const d = destById(el.dataset.id); d.transport ||= {}; d.transport[el.dataset.key] = el.checked ? "Sim" : "Não"; save(); },
