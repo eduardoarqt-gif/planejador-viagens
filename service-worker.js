@@ -1,5 +1,5 @@
-const CACHE = "planejador-viagens-v42";
-const ASSETS = ["./", "./index.html", "./styles.css?v=42", "./app.js?v=42", "./core.js?v=42", "./data.js?v=42", "./ui.js?v=42", "./services.js?v=42", "./mascaras.js?v=42", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
+const CACHE = "planejador-viagens-v43";
+const ASSETS = ["./", "./index.html", "./styles.css?v=43", "./app.js?v=43", "./core.js?v=43", "./data.js?v=43", "./ui.js?v=43", "./services.js?v=43", "./mascaras.js?v=43", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", event => {
   self.skipWaiting();

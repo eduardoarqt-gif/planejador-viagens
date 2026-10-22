@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=42";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=42";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=42";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=42";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=43";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=43";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=43";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=43";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -129,6 +129,34 @@ function syncTripDays(t) {
   else if (t.baseStart != null) { t.start = t.baseStart; delete t.baseStart; }
   const used = chosenScenario(t).segments.reduce((s, x) => s + x.days, 0);
   if (used > 0) t.days = used;
+}
+/* Viagem concluída: a duração é a da rota. Se a rota encolheu (ex.: parte que não foi realizada), tira os dias
+   que sobraram e oferece apagar as atividades e atrações desses dias. */
+async function fitConcludedDays(trip) {
+  if (!trip || trip.status !== "concluida") return;
+  const used = chosenScenario(trip).segments.reduce((n, x) => n + x.days, 0);
+  if (used < 1 || used === trip.days) return;
+  if (used > trip.days) { trip.days = used; return; }
+  const oldDays = trip.days;
+  const acts = Object.entries(trip.itinerary || {}).filter(([k, list]) => Number(k) >= used && list?.length).reduce((n, [, l]) => n + l.length, 0);
+  const pins = (trip.places || []).filter(p => p.day != null && p.day >= used).length;
+  const endISO = trip.start ? addDays(trip.start, used - 1) : "";
+  const books = endISO ? trip.bookings.filter(b => b.date && b.date > endISO).length : 0;
+  let wipe = true;
+  if (acts || pins || books) {
+    const extra = [acts ? `${acts} ${acts === 1 ? "atividade" : "atividades"}` : "", pins ? `${pins} ${pins === 1 ? "atração no mapa" : "atrações no mapa"}` : ""].filter(Boolean).join(" e ");
+    const v = await ask("Ajustar dias da viagem", [
+      { name: "_n", type: "note", label: `A rota agora tem ${plural(used, "dia", "dias")} (eram ${oldDays}). Os dias ${used + 1} a ${oldDays} saem da viagem.${books ? ` ${books} ${books === 1 ? "reserva continua" : "reservas continuam"} em Reservas com data depois do fim (apague lá se não valem mais).` : ""}` },
+      ...(acts || pins ? [{ name: "wipe", label: `Apagar também ${extra} desses dias`, type: "checkbox", value: true }] : [])
+    ], { confirm: "Ajustar" });
+    if (!v) return;
+    wipe = acts || pins ? !!v.wipe : false;
+  }
+  trip.days = used;
+  if (wipe) {
+    for (const k of Object.keys(trip.itinerary || {})) if (Number(k) >= used) delete trip.itinerary[k];
+    trip.places = (trip.places || []).filter(p => !(p.day != null && p.day >= used));
+  }
 }
 const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); syncTripDays(t); }); save(); render(keepScroll); };
 state.trips.forEach(syncTripDays);
@@ -378,6 +406,8 @@ function tabScenarios(trip) {
   const cards = liveScenarios(trip).map(sc => {
     const st = scenarioStats(sc, trip);
     const chosen = sc.id === trip.chosenId;
+    const fitNote = trip.status === "concluida" && chosen && st.used && st.used !== trip.days
+      ? `<div class="notice">A viagem está com ${plural(trip.days, "dia", "dias")}, mas a rota tem ${st.used}. <button class="btn soft sm" data-act="trip-fit-days">Ajustar para ${st.used}</button></div>` : "";
     const from = trip.lockPeriod ? trip.start : (sc.start || trip.baseStart || trip.start);
     const dates = from && st.used ? ` · ${fmtShort(from)} → ${fmtShort(addDays(from, st.used - 1))}` : "";
     const note = trip.lockPeriod
@@ -400,6 +430,7 @@ function tabScenarios(trip) {
       </div>`).join("");
     return `<article class="card scenario ${chosen ? "chosen" : ""}">
       <div class="card-head"><div><h2>${esc(sc.name)}</h2>${note}</div><div class="head-actions"><button class="btn primary sm" data-act="sc-add-item" data-sc="${sc.id}">+ Item</button>${chosen ? `<span class="pill chosen">Escolhido</span>` : ""}</div></div>
+      ${fitNote}
       <div class="routebar" aria-hidden="true">${bar}</div>
       <div class="route-text">${sc.segments.map(s => `${esc(s.city)} <b>${s.days}</b>`).join(" · ")}</div>
       <div class="segs">${rows}</div>
@@ -1202,20 +1233,22 @@ const actions = {
   "sc-choose"(el) { const pick = findSc(el); delete pick.archived; currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
   "sc-view"(el) { ui.scenarioId = el.dataset.sc; render(); },
   "sc-open-costs"(el) { ui.scenarioId = el.dataset.sc; ui.tab = "custos"; render(); },
-  "seg-days"(el) { const seg = findSeg(el); seg.days = Math.max(1, seg.days + Number(el.dataset.d)); commit(true); },
+  async "seg-days"(el) { const seg = findSeg(el); seg.days = Math.max(1, seg.days + Number(el.dataset.d)); await fitConcludedDays(currentTrip()); commit(true); },
   "seg-move"(el) {
     const sc = findSc(el);
     const i = Number(el.dataset.i), j = i + Number(el.dataset.d);
     [sc.segments[i], sc.segments[j]] = [sc.segments[j], sc.segments[i]];
     commit(true);
   },
-  "seg-del"(el) {
+  async "seg-del"(el) {
     const sc = findSc(el);
     const seg = sc.segments[Number(el.dataset.i)];
     sc.segments.splice(Number(el.dataset.i), 1);
     sc.costs.forEach(c => { if (c.segId === seg.id) c.segId = ""; });
+    await fitConcludedDays(currentTrip());
     commit(true);
   },
+  async "trip-fit-days"() { await fitConcludedDays(currentTrip()); commit(true); },
   async "seg-edit"(el) {
     const seg = findSeg(el);
     const v = await ask("Trecho da rota", [
@@ -1228,6 +1261,7 @@ const actions = {
     const changed = normName(city) !== normName(seg.city) || country !== (seg.country || "");
     seg.city = city; seg.days = Math.max(1, Number(v.days) || 1);
     if (changed) { seg.country = country; delete seg.lat; delete seg.lon; if (!seg.transit && !country) await pickPlaceFor(seg); }
+    await fitConcludedDays(currentTrip());
     commit(true);
   },
   async "seg-add"(el) {
@@ -1241,9 +1275,10 @@ const actions = {
     const seg = { id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) };
     if (v.country.trim()) seg.country = v.country.trim(); else await pickPlaceFor(seg);
     sc.segments.push(seg);
+    await fitConcludedDays(currentTrip());
     commit(true);
   },
-  "seg-add-transit"(el) { findSc(el).segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true }); commit(true); },
+  async "seg-add-transit"(el) { findSc(el).segments.push({ id: uid(), city: "Deslocamento", days: 1, transit: true }); await fitConcludedDays(currentTrip()); commit(true); },
 
   /* custos, roteiro, reservas */
   async "sc-add-item"(el) {
