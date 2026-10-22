@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=41";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=41";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=41";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=41";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=42";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=42";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=42";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=42";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1407,7 +1407,7 @@ const actions = {
     const hereLabel = cityKey && cityKey !== "a definir" ? `Cidade do dia: ${city}` : "Todas as cidades";
     const f = await ask(`Lugares do Life · Dia ${day + 1}`, [
       { name: "city", label: "Cidade", type: "select", options: [hereLabel, "Todas as cidades", ...cities].filter((x, i, a) => a.indexOf(x) === i), value: hereLabel },
-      { name: "st", label: "Situação", type: "select", options: ["Quero conhecer e favoritos", "Todos"], value: "Quero conhecer e favoritos" },
+      { name: "st", label: "Situação", type: "select", options: ["Todos (inclui visitados)", "Quero conhecer e favoritos", "Só visitados"], value: "Todos (inclui visitados)" },
       { name: "cat", label: "Categoria", type: "select", options: ["Todas", ...Object.values(LIFE_CAT).map(c => c[1])], value: "Todas" },
       { name: "q", label: "Buscar pelo nome (opcional)", placeholder: "Ex.: japonês" }
     ], { confirm: "Ver lugares" });
@@ -1417,7 +1417,8 @@ const actions = {
     const list = all.filter(p => {
       if (f.city === hereLabel && hereLabel !== "Todas as cidades") { const pc = normName(p.cidade); if (!pc || !(cityKey.includes(pc) || pc.includes(cityKey))) return false; }
       else if (f.city !== "Todas as cidades" && f.city !== hereLabel && p.cidade !== f.city) return false;
-      if (f.st !== "Todos" && p.status === "visitado") return false;
+      if (f.st === "Quero conhecer e favoritos" && p.status === "visitado") return false;
+      if (f.st === "Só visitados" && p.status !== "visitado") return false;
       if (wantCat && p.categoria !== wantCat) return false;
       if (q && !normName(`${p.nome} ${p.notas || ""} ${p.cidade || ""}`).includes(q)) return false;
       return true;
