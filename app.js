@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=45";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=45";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=45";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=45";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=46";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=46";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=46";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=46";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -15,6 +15,8 @@ const CAT_BOOKING = { Passagens: "Voo", Hospedagem: "Hotel", Transporte: "Carro"
 const CURRENCIES = ["BRL", "USD", "EUR", "GBP", "ARS", "CLP", "UYU", "PYG", "COP", "PEN", "MXN", "CAD", "AUD", "CHF", "JPY", "CNY", "THB", "SGD", "AED", "TRY", "ZAR"];
 const curOptions = cur => (cur && !CURRENCIES.includes(cur) ? [cur, ...CURRENCIES] : CURRENCIES);
 const LIFE_CAT = { restaurante: ["🍽", "Restaurante"], bar: ["🍸", "Bar"], cafe: ["☕", "Café"], delivery: ["🛵", "Delivery"], hotel: ["🛏", "Hotel"], atracao: ["🎟", "Atração"], outro: ["📍", "Outro"] };
+/* horários padrão de hotel (sugestão; dá para mudar em cada reserva) */
+const HOTEL_CHECKIN = "14:00", HOTEL_CHECKOUT = "12:00";
 const CHECKIN = ["Ainda não", "Aberto", "Feito"];
 const BOOKING_TYPES = ["Voo", "Hotel", "Carro", "Transfer", "Ingresso", "Seguro", "Outro"];
 const BOOKING_ICON = { Voo: "✈️", Hotel: "🛏️", Carro: "🚗", Transfer: "🚐", Ingresso: "🎟️", Seguro: "🛡️", Outro: "📌" };
@@ -862,9 +864,9 @@ async function editBooking(b, pre = {}) {
     { name: "cur", label: "Moeda do valor", type: "select", options: curOptions(b?.cur), value: b?.cur || "BRL", hint: "O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
-    { name: "checkinTime", label: "Horário de entrada (check-in)", type: "time", value: b?.checkinTime, showIf: ["type", "Hotel"] },
+    { name: "checkinTime", label: "Horário de entrada (check-in)", type: "time", value: b?.checkinTime || HOTEL_CHECKIN, hint: "Sugestão padrão (14:00); ajuste se o hotel informou outro horário.", showIf: ["type", "Hotel"] },
     { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
-    { name: "checkoutTime", label: "Horário de saída (check-out)", type: "time", value: b?.checkoutTime, showIf: ["type", "Hotel"] },
+    { name: "checkoutTime", label: "Horário de saída (check-out)", type: "time", value: b?.checkoutTime || HOTEL_CHECKOUT, hint: "Sugestão padrão (12:00).", showIf: ["type", "Hotel"] },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
     { name: "confirmed", label: "Confirmação recebida", type: "checkbox", value: !!b?.confirmed },
     { name: "checkin", label: "Check-in online", type: "select", options: CHECKIN, value: b?.checkin || CHECKIN[0], showIf: ["type", "Voo"] },
