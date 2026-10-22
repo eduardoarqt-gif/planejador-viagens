@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=39";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=39";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=39";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=39";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=40";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=40";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=40";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=40";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -260,6 +260,8 @@ function renderDestPage(d) {
   const sec = (title, act, content) => `<section class="card"><div class="card-head"><h2>${title}</h2><button class="btn soft sm" data-act="${act}" data-id="${d.id}">Editar</button></div>${content}</section>`;
   const val = v => v ? esc(v) : `<span class="muted">—</span>`;
   const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  /* sim/não direto na tela: marcar grava "Sim", desmarcar grava "Não" */
+  const flag = (d, key, label) => `<label class="check kv-check"><input type="checkbox" data-act="dest-flag" data-id="${d.id}" data-key="${key}" ${/^sim/i.test(d.transport?.[key] || "") ? "checked" : ""}><span>${label}</span></label>`;
   return `<header class="trip-head">
       <div class="trip-head-top"><a class="back" href="#/" aria-label="Voltar">‹</a><button class="icon-btn" data-act="dest-menu" data-id="${d.id}" aria-label="Opções">⋯</button></div>
       <h1>${esc(d.name)}</h1><p class="muted">${esc(d.country || "País não informado")}</p>
@@ -267,7 +269,7 @@ function renderDestPage(d) {
     </header>
     <main class="tab-body">
       ${sec("Resumo", "dest-edit-summary", `${kv("Minha nota", d.rating != null && d.rating !== "" ? `${String(d.rating).replace(".", ",")} / 10` : val(""))}${kv("Melhor época", val(d.bestSeason))}${kv("Pontos fortes", val(d.pros))}${kv("Pontos fracos", val(d.cons))}${kv("Perrengues", val(d.perrengues))}`)}
-      ${sec("Transporte", "dest-edit-transport", `${kv("O que usar", val(d.transport?.use))}${kv("Vale alugar carro?", val(d.transport?.car))}${kv("Tem metrô?", val(d.transport?.metro))}${d.transport?.notes ? kv("Notas", val(d.transport.notes)) : ""}`)}
+      ${sec("Transporte", "dest-edit-transport", `${kv("O que usar", val(d.transport?.use))}${flag(d, "car", "Vale alugar carro?")}${flag(d, "metro", "Tem metrô?")}${d.transport?.notes ? kv("Notas", val(d.transport.notes)) : ""}`)}
       <section class="card"><div class="card-head"><h2>Pontos turísticos</h2><button class="btn soft sm" data-act="attr-add" data-id="${d.id}">+ Ponto</button></div>
         ${(d.attractions || []).map(a => `<div class="check-row ${a.visited ? "done" : ""}"><button class="check-btn" data-act="attr-toggle" data-id="${d.id}" data-a="${a.id}" aria-label="Marcar como conhecido">${a.visited ? "✓" : ""}</button><button class="check-text" data-act="attr-edit" data-id="${d.id}" data-a="${a.id}">${esc(a.name)}</button></div>`).join("") || `<p class="muted tiny">O que conhecer. Marque os que você já visitou.</p>`}
       </section>
@@ -1392,6 +1394,7 @@ const actions = {
   async "dest-add"() { await editDest(null); },
   async "dest-menu"(el) { await editDest(destById(el.dataset.id)); },
   "dest-repeat"(el) { destById(el.dataset.id).repeat = el.checked; save(); },
+  "dest-flag"(el) { const d = destById(el.dataset.id); d.transport ||= {}; d.transport[el.dataset.key] = el.checked ? "Sim" : "Não"; save(); },
   async "dest-edit-summary"(el) {
     const d = destById(el.dataset.id);
     const v = await ask("Resumo do destino", [
@@ -1485,6 +1488,7 @@ document.addEventListener("click", event => {
 document.addEventListener("change", event => {
   const t = event.target;
   if (t.matches("input[data-act=dest-repeat]")) { actions["dest-repeat"](t); return; }
+  if (t.matches("input[data-act=dest-flag]")) { actions["dest-flag"](t); return; }
   if (t.id === "mapDaySel") { ui.mapDay = t.value; render(true); return; }
   if (t.id !== "restoreFile") return;
   const file = t.files[0];
