@@ -1,4 +1,4 @@
-import { prepareFile, storeFile } from "./data.js?v=44";
+import { prepareFile, storeFile } from "./data.js?v=45";
 
 export const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 export const brl = value => money.format(value || 0);

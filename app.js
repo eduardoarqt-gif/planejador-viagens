@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=44";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=44";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=44";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=44";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=45";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=45";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=45";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=45";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -612,11 +612,22 @@ function missingBookings(trip) {
   let day = 0;
   const segs = sc.segments.map(s => { const r = { ...s, from: day, to: day + s.days - 1 }; day += s.days; return r; });
   const cities = segs.filter(s => !s.transit && s.city && s.city !== "A definir");
-  for (const s of cities) {
-    const a = trip.start ? dayISO(trip, s.from) : "", z = trip.start ? dayISO(trip, s.to + 1) : "";
-    if (!bks.some(b => b.type === "Hotel" && (mentions(b, s.city) || inRange(b, a, z)))) {
-      out.push({ type: "Hotel", desc: `Hotel em ${s.city}`, date: a, label: `Hospedagem em ${s.city} (${s.days} ${s.days === 1 ? "dia" : "dias"})` });
-    }
+  /* Hospedagem: cobre o destino se o nome cita a cidade, se as datas caem no trecho, se o custo ligado está vinculado ao destino,
+     ou — reserva SEM data — se sobrou um destino sem hotel (cada reserva sem data cobre um destino, na ordem da rota). */
+  const hoteis = bks.filter(b => b.type === "Hotel");
+  const ligado = (b, seg) => sc.costs.some(c => c.bookingId === b.id && c.segId === seg.id);
+  const cobertura = new Map(), usados = new Set();
+  for (const sg of cities) {
+    const a = trip.start ? dayISO(trip, sg.from) : "", z = trip.start ? dayISO(trip, sg.to + 1) : "";
+    const achou = hoteis.find(b => mentions(b, sg.city) || inRange(b, a, z) || ligado(b, sg));
+    if (achou) { cobertura.set(sg.id, achou); usados.add(achou.id); }
+  }
+  const sobras = hoteis.filter(b => !b.date && !usados.has(b.id));
+  for (const sg of cities) if (!cobertura.has(sg.id) && sobras.length) cobertura.set(sg.id, sobras.shift());
+  for (const sg of cities) {
+    if (cobertura.has(sg.id)) continue;
+    const a = trip.start ? dayISO(trip, sg.from) : "";
+    out.push({ type: "Hotel", desc: `Hotel em ${sg.city}`, date: a, label: `Hospedagem em ${sg.city} (${sg.days} ${sg.days === 1 ? "dia" : "dias"})` });
   }
   for (let i = 1; i < cities.length; i += 1) {
     const from = cities[i - 1], to = cities[i];
@@ -627,12 +638,15 @@ function missingBookings(trip) {
   }
   if (cities.length && !bks.some(b => b.type === "Voo")) out.push({ type: "Voo", desc: "Passagens de ida e volta", date: trip.start || "", label: "Passagens de ida e volta" });
   if (cities.length && !bks.some(b => b.type === "Seguro")) out.push({ type: "Seguro", desc: "Seguro viagem", date: trip.start || "", label: "Seguro viagem" });
-  return out;
+  const ocultos = new Set(trip.noNeed || []);
+  out.forEach(m => { m.key = `${m.type}|${m.label}`; m.skipped = ocultos.has(m.key); });
+  return ui.showSkipped ? out : out.filter(m => !m.skipped);
 }
 
 function tabBookings(trip) {
   const missing = trip.status === "concluida" ? [] : missingBookings(trip);
-  const missingHtml = missing.length ? `<section class="alerts"><h3>O que falta reservar</h3>${missing.map((m, i) => `<button class="alert-row" data-act="book-add" data-miss="${i}"><span><b>${esc(m.label)}</b><small>Toque para cadastrar</small></span><b>+</b></button>`).join("")}</section>` : "";
+  const nHidden = (trip.noNeed || []).length;
+  const missingHtml = missing.length || nHidden ? `<section class="alerts"><h3>O que falta reservar</h3>${missing.map((m, i) => `<div class="miss-row ${m.skipped ? "skipped" : ""}"><button class="alert-row" data-act="book-add" data-miss="${i}"><span><b>${esc(m.label)}</b><small>${m.skipped ? "Marcado como \"não preciso\"" : "Toque para cadastrar"}</small></span><b>+</b></button><button class="mini" data-act="miss-skip" data-miss="${i}" aria-label="${m.skipped ? "Voltar a mostrar" : "Não preciso"}" title="${m.skipped ? "Voltar a mostrar" : "Não preciso"}">${m.skipped ? "↺" : "×"}</button></div>`).join("") || `<p class="muted tiny">Nada pendente.</p>`}${nHidden ? `<button class="link tiny" data-act="miss-toggle">${ui.showSkipped ? "Esconder" : "Mostrar"} os ${nHidden} que marquei como "não preciso"</button>` : ""}</section>` : "";
   const sorted = trip.bookings.slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
   const open = sorted.filter(b => !b.done), done = sorted.filter(b => b.done);
   const item = b => `<div class="booking ${b.done ? "done" : ""}">
@@ -1403,6 +1417,15 @@ const actions = {
     ui.hojeDay = Math.min(trip.days - 1, Math.max(0, cur + Number(el.dataset.d)));
     render(true);
   },
+  "miss-skip"(el) {
+    const trip = currentTrip(), m = missingBookings(trip)[Number(el.dataset.miss)];
+    if (!m) return;
+    const set = new Set(trip.noNeed || []);
+    if (set.has(m.key)) set.delete(m.key); else set.add(m.key);
+    trip.noNeed = [...set];
+    commit(true);
+  },
+  "miss-toggle"() { ui.showSkipped = !ui.showSkipped; render(true); },
   async "book-add"(el) { const m = el?.dataset?.miss != null ? missingBookings(currentTrip())[Number(el.dataset.miss)] : null; await editBooking(null, m || {}); },
   async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
   "book-toggle"(el) { const b = currentTrip().bookings.find(x => x.id === el.dataset.id); b.done = !b.done; commit(true); },
