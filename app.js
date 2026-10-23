@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=46";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=46";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=46";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=46";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=47";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=47";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=47";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=47";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1076,6 +1076,7 @@ async function lifePick(el) {
     { name: "q", label: "Buscar pelo nome (opcional)", placeholder: "Ex.: japonês" }
   ], { confirm: "Ver lugares" });
   if (!f) return;
+  toast("Procurando os lugares…");
   const wantCat = Object.entries(LIFE_CAT).find(([, c]) => c[1] === f.cat)?.[0];
   const q = normName(f.q || "");
   const list = all.filter(p => {
@@ -1519,7 +1520,11 @@ const actions = {
   async "dest-menu"(el) { await editDest(destById(el.dataset.id)); },
   async "life-pick"(el) {
     try { await lifePick(el); }
-    catch (err) { console.error(err); await ask("Lugares do Life", [{ name: "_e", type: "note", label: `Algo deu errado: ${err?.message || err}` }], { confirm: "OK" }); }
+    catch (err) {
+      console.error(err);
+      toast(`Lugares do Life: algo deu errado (${err?.message || err})`);
+      try { await ask("Lugares do Life", [{ name: "_e", type: "note", label: `Algo deu errado: ${err?.message || err}` }], { confirm: "OK" }); } catch { /* o aviso acima já apareceu */ }
+    }
   },
   "dest-repeat"(el) { destById(el.dataset.id).repeat = el.checked; save(); },
   "dest-flag"(el) { const d = destById(el.dataset.id); d.transport ||= {}; d.transport[el.dataset.key] = el.checked ? "Sim" : "Não"; save(); },

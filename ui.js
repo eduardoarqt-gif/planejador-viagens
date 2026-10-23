@@ -1,4 +1,4 @@
-import { prepareFile, storeFile } from "./data.js?v=46";
+import { prepareFile, storeFile } from "./data.js?v=47";
 
 export const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 export const brl = value => money.format(value || 0);
@@ -106,8 +106,14 @@ export function ask(title, fields, { confirm = "Salvar", danger = false } = {}) 
     const finish = value => {
       document.removeEventListener("paste", onPaste);
       sheet.onclose = null;
-      if (sheet.open) sheet.close();
-      resolve(value);
+      if (!sheet.open) { resolve(value); return; }
+      /* Duas janelas seguidas (ex.: "+ Lugar do Life": filtros -> lista): se a próxima abrisse no mesmo instante em que esta fecha,
+         o "close" (assíncrono) desta fecharia a nova e ela "sumia" no Safari do iPhone. Entrega o resultado só depois do close. */
+      let entregue = false;
+      const entregar = () => { if (!entregue) { entregue = true; setTimeout(() => resolve(value), 40); } };
+      sheet.addEventListener("close", entregar, { once: true });
+      sheet.close();
+      setTimeout(entregar, 400);          // garantia, caso o navegador não dispare o close
     };
     sheet.onclose = () => finish(null);
     sheetForm.onsubmit = event => {
