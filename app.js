@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=47";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=47";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=47";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=47";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=48";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=48";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=48";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=48";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -159,6 +159,17 @@ async function fitConcludedDays(trip) {
     for (const k of Object.keys(trip.itinerary || {})) if (Number(k) >= used) delete trip.itinerary[k];
     trip.places = (trip.places || []).filter(p => !(p.day != null && p.day >= used));
   }
+}
+/* Viagem planejada/em andamento cuja volta já passou vira "Concluída" sozinha (pedido do Eduardo, 27/10/2026). Fica marcada como
+   automática (`autoConcluida`) e dá pra reabrir pela faixa no topo da viagem ou pela "Situação" nas opções; se você reabrir, não
+   concluímos de novo enquanto as datas forem as mesmas (`autoOffAte`). */
+const tripEnd = t => (t.start ? addDays(t.start, t.days - 1) : "");
+function autoConcluir() {
+  const hoje = todayISO();
+  const feitas = state.trips.filter(t => ["planejada", "andamento"].includes(t.status) && t.start && tripEnd(t) < hoje && t.autoOffAte !== tripEnd(t));
+  feitas.forEach(t => { t.status = "concluida"; t.autoConcluida = true; });
+  if (feitas.length) commit(true);
+  return feitas.length;
 }
 const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); syncTripDays(t); }); save(); render(keepScroll); };
 state.trips.forEach(syncTripDays);
@@ -336,6 +347,7 @@ function renderTrip(trip) {
         <button class="icon-btn" data-act="trip-menu" aria-label="Opções da viagem">⋯</button>
       </div>
       <span class="pill ${trip.status}">${TRIP_STATUS[trip.status]}</span>
+      ${trip.status === "concluida" && trip.autoConcluida ? `<p class="muted">Concluída automaticamente: a volta (${fmtShort(tripEnd(trip))}) já passou. <button class="link" data-act="trip-undo-auto">Foi engano? Voltar a Planejada</button></p>` : ""}
       <h1>${esc(trip.name)}</h1>
       <p class="muted">${[tripCountries(trip).join(", "), dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
       <div class="kpis">
@@ -1205,6 +1217,8 @@ const actions = {
       name: v.name.trim() || trip.name, country: v.country != null ? v.country.trim() : trip.country, destName: v.destName != null ? v.destName.trim() : trip.destName,
       travelers: parseNames(v.travelers), status: statusKey(v.status) || trip.status, wouldRepeat: v.wouldRepeat
     });
+    if (trip.status !== "concluida") trip.autoConcluida = false;          // mudou a situação à mão: deixa de ser "automática"
+    if (trip.status !== "concluida" && trip.start && tripEnd(trip) < todayISO()) trip.autoOffAte = tripEnd(trip);   // e não conclui de novo sozinho
     /* retorno informado manda sobre os dias; senão, valem os dias */
     const oldEnd = trip.start ? addDays(trip.start, trip.days - 1) : "";
     let newDays = Math.max(1, Number(v.days) || trip.days);
@@ -1308,6 +1322,11 @@ const actions = {
     ui.tab = "roteiro";
     commit();
     toast("Viagem confirmada.");
+  },
+  "trip-undo-auto"() {
+    const t = currentTrip();
+    t.status = "planejada"; t.autoConcluida = false; t.autoOffAte = tripEnd(t);
+    ui.tab = "roteiro"; commit(); toast("Voltou a Planejada. Não concluo de novo sozinho (a menos que você mude as datas).");
   },
   "trip-reopen"() { currentTrip().status = "rascunho"; ui.tab = "cenarios"; commit(); toast("Voltou a rascunho."); },
   "sc-choose"(el) { const pick = findSc(el); delete pick.archived; currentTrip().chosenId = el.dataset.sc; ui.scenarioId = null; commit(); toast("Cenário escolhido."); },
@@ -1653,13 +1672,15 @@ document.addEventListener("drop", e => {
   commit(true);
 });
 window.addEventListener("hashchange", () => { ui.scenarioId = null; render(); });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { autoConcluir(); sync(); } });
 window.addEventListener("online", () => sync());
 
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
 
 /* abre direto no dia da viagem em andamento */
 (function boot() {
+  const autoFeitas = autoConcluir();
+  if (autoFeitas) setTimeout(() => toast(`${autoFeitas === 1 ? "1 viagem foi concluída" : autoFeitas + " viagens foram concluídas"} automaticamente (a volta já passou). Foi engano? Abra a viagem em Histórico e toque em "Voltar a Planejada".`), 400);
   const act = activeTrip();
   const r = route();
   if (act && (r[0] === "" || r[0] === undefined) && !sessionStorage.getItem("autoOpened")) {
