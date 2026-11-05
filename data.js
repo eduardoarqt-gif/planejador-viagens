@@ -30,7 +30,7 @@ function linkBookingCosts(t) {
     if (b.costSynced || b.amount == null || b.amount === "") continue;
     b.costSynced = true;
     if (t.scenarios.some(s => s.costs.some(c => c.bookingId === b.id))) continue;
-    sc.costs.push({ id: uid(), desc: b.desc, cat: BOOKING_CAT[b.type] || "Outros", amount: Number(b.amount), cur: b.cur || "BRL", rate: b.rate || 1, perPerson: false, segId: "", status: "Reservado", refundable: true, bookingId: b.id });
+    sc.costs.push({ id: uid(), desc: b.desc, cat: BOOKING_CAT[b.type] || "Outros", amount: Number(b.amount), cur: b.cur || "BRL", rate: b.rate || 1, perPerson: false, segId: "", status: b.confirmed ? "Reservado" : "Estimado", refundable: true, bookingId: b.id });
   }
 }
 
@@ -42,7 +42,11 @@ export function syncLinkedCosts(t) {
     const b = byId.get(c.bookingId);
     if (!b) { delete c.bookingId; continue; }
     c.desc = b.desc;
-    if (b.amount != null && b.amount !== "") { c.amount = Number(b.amount); c.cur = b.cur || "BRL"; c.rate = b.rate || 1; }
+    if (b.amount != null && b.amount !== "") {
+      c.amount = Number(b.amount); c.cur = b.cur || "BRL"; c.rate = b.rate || 1;
+      /* valor lançado na reserva é só cotação até marcar "Confirmação recebida" (aí vira Reservado) */
+      if (t.status !== "concluida" && c.status !== "Pago") c.status = b.confirmed ? "Reservado" : "Estimado";
+    }
   }
 }
 
