@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=51";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=51";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=51";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=51";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=52";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=52";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=52";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=52";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -174,6 +174,13 @@ function autoConcluir() {
 /* Hospedagem lançada sozinha ao criar um destino na rota (custo "a orçar", `autoHotel`): enquanto não houver valor nem reserva ligada,
    ela acompanha o destino (nome, noites e datas de entrada/saída). Depois de cotada ou reservada, não é mais mexida. */
 const scenarioStart = (t, sc) => (t.lockPeriod ? t.start : sc.start || t.baseStart || t.start) || "";
+/* primeiro e último dia de cada destino da rota (vazio se a viagem ainda não tem data de saída) */
+function segRange(t, sc, i) {
+  const start = scenarioStart(t, sc);
+  if (!start || !sc.segments[i]) return null;
+  const before = sc.segments.slice(0, i).reduce((n, s) => n + s.days, 0);
+  return { from: addDays(start, before), to: addDays(start, before + sc.segments[i].days - 1) };
+}
 function hotelPeriod(t, sc, seg) {
   const before = sc.segments.slice(0, sc.segments.indexOf(seg)).reduce((n, s) => n + s.days, 0);
   const start = scenarioStart(t, sc);
@@ -458,7 +465,7 @@ function tabScenarios(trip) {
     const bar = sc.segments.map(s => `<i class="${s.transit ? "transit" : ""}" style="flex:${s.days}" title="${esc(s.city)}"></i>`).join("") + (trip.lockPeriod && st.free > 0 ? `<i class="free" style="flex:${st.free}"></i>` : "");
     const rows = sc.segments.map((s, i) => `
       <div class="seg ${s.transit ? "transit" : ""}">
-        <button class="seg-name" data-act="seg-edit" data-sc="${sc.id}" data-i="${i}">${s.transit ? "↝ " : ""}${esc(s.city)}</button>
+        <button class="seg-name" data-act="seg-edit" data-sc="${sc.id}" data-i="${i}">${s.transit ? "↝ " : ""}${esc(s.city)}${(r => r ? `<small class="muted"> · ${fmtShort(r.from).slice(0, 5)} → ${fmtShort(r.to).slice(0, 5)}</small>` : "")(segRange(trip, sc, i))}</button>
         <div class="stepper">
           <button data-act="seg-days" data-d="-1" data-sc="${sc.id}" data-i="${i}" aria-label="Menos um dia">−</button>
           <span>${plural(s.days, "dia", "dias")}</span>
@@ -1377,16 +1384,32 @@ const actions = {
   },
   async "trip-fit-days"() { await fitConcludedDays(currentTrip()); commit(true); },
   async "seg-edit"(el) {
-    const seg = findSeg(el);
+    const seg = findSeg(el), sc = findSc(el), trip = currentTrip(), idx = Number(el.dataset.i);
+    const range = segRange(trip, sc, idx);
     const v = await ask("Trecho da rota", [
       { name: "city", label: "Destino", value: seg.city, required: true },
       { name: "country", label: "País (opcional)", value: seg.country || "", placeholder: trip0().country || "Ex.: Brasil", hint: "Deixe vazio para escolher na lista de lugares." },
-      { name: "days", label: "Dias", type: "number", value: seg.days, min: 1 }
+      ...(range ? [
+        { name: "from", label: "Chegada", type: "date", value: range.from, hint: idx === 0 ? "Mudar a chegada do primeiro destino muda a data de saída da viagem." : "Mudar a chegada move a divisa com o destino anterior (ele ganha ou perde dias)." },
+        { name: "to", label: "Saída (último dia no destino)", type: "date", value: range.to, hint: "Os destinos seguintes acompanham." }
+      ] : []),
+      { name: "days", label: "Dias", type: "number", value: seg.days, min: 1, hint: range ? "Ou informe só o número de dias; as datas acima se ajustam." : "" }
     ]);
     if (!v) return;
     const city = v.city.trim(), country = v.country.trim();
     const changed = normName(city) !== normName(seg.city) || country !== (seg.country || "");
-    seg.city = city; seg.days = Math.max(1, Number(v.days) || 1);
+    let days = Math.max(1, Number(v.days) || 1);
+    if (range && v.from && v.to) {
+      const d = diffDays(range.from, v.from);
+      const fromChanged = d !== 0, toChanged = v.to !== range.to;
+      if (fromChanged) {
+        if (idx === 0) { if (trip.lockPeriod) trip.start = v.from; else sc.start = v.from; }
+        else sc.segments[idx - 1].days = Math.max(1, sc.segments[idx - 1].days + d);
+      }
+      if (toChanged || (fromChanged && idx > 0)) days = Math.max(1, diffDays(v.from, v.to) + 1);
+      else if (!fromChanged) days = Math.max(1, Number(v.days) || 1);
+    }
+    seg.city = city; seg.days = days;
     if (changed) { seg.country = country; delete seg.lat; delete seg.lon; if (!seg.transit && !country) await pickPlaceFor(seg); }
     await fitConcludedDays(currentTrip());
     commit(true);
