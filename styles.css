@@ -316,3 +316,5 @@ html,body,*{touch-action:manipulation}
 .miss-row { display: flex; align-items: center; gap: 6px; }
 .miss-row .alert-row { flex: 1; }
 .miss-row.skipped { opacity: .5; }
+
+.city-life { margin-left: 10px; font-family: var(--sans, inherit); font-size: 12px; vertical-align: middle; }

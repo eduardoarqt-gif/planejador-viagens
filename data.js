@@ -135,6 +135,8 @@ const b64encode = text => {
 };
 /* Lugares do Dudoo Life (repositório privado dudoolife-dados). Somente leitura; usa o mesmo token da sincronização. */
 const LIFE_KEY = "planejador-life-lugares";
+/* só a cópia salva (sem internet), para mostrar um resumo na hora */
+export const getCachedLifePlaces = () => { try { return JSON.parse(localStorage.getItem(LIFE_KEY))?.itens || []; } catch { return []; } };
 export async function getLifePlaces() {
   const cached = (() => { try { return JSON.parse(localStorage.getItem(LIFE_KEY)); } catch { return null; } })();
   if (!syncToken()) { if (cached) return { itens: cached.itens, at: cached.at, offline: true }; throw new Error("Cole o token de sincronização (⋯ na tela inicial) para ler os lugares do Dudoo Life."); }
