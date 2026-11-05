@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=48";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=48";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=48";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=48";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=49";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=49";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=49";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=49";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -872,7 +872,7 @@ async function editBooking(b, pre = {}) {
   const v = await ask(b ? "Editar reserva" : "Nova reserva", [
     { name: "type", label: "Tipo", type: "select", options: BOOKING_TYPES, value: b?.type || pre.type || "Hotel" },
     { name: "desc", label: "Descrição", value: b?.desc ?? pre.desc, required: true, placeholder: "Ex.: Hotel Marais" },
-    { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
+    { name: "amount", label: "Valor (opcional) — entra no orçamento; passagem: valor por pessoa", type: "money", value: b?.amount != null ? num(b.amount) : pre.amount != null ? num(pre.amount) : "", placeholder: "Ex.: 800 ou 2.609" },
     { name: "cur", label: "Moeda do valor", type: "select", options: curOptions(b?.cur), value: b?.cur || "BRL", hint: "O valor vira um custo ligado no cenário escolhido." },
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
@@ -1386,7 +1386,7 @@ const actions = {
     const v = await ask("Adicionar item", [
       { name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] },
       { name: "desc", label: "Descrição (opcional)", placeholder: "Ex.: Gol SP → Natal" },
-      { name: "amount", label: "Valor em reais (opcional) — passagem: por pessoa", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Com valor, entra direto no orçamento. Sem valor, fica na lista de Custos como \"a orçar\" (lembrete); toque nele depois para lançar reserva e valor." }
+      { name: "amount", label: "Valor em reais (opcional) — passagem: por pessoa", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Hospedagem, passagem, carro etc. abrem em seguida a ficha da reserva (datas, horários, localizador). Sem valor, fica em Custos como \"a orçar\" (lembrete)." }
     ], { confirm: "Continuar" });
     if (!v) return;
     const kind = ITEM_KINDS.find(k => k[0] === v.kind);
@@ -1394,23 +1394,22 @@ const actions = {
     let amount = null;
     if (v.amount) { amount = money2(v.amount); if (amount == null) return; }
     ui.scenarioId = sc.id;
-    if (amount == null) {
-      if (!kind || !kind[1]) { await editCost(sc, null); return; }
-      /* sem valor: entra na lista de Custos como "a orçar" (lembrete); ao tocar, abre a reserva ligada */
-      sc.costs.push({ id: uid(), desc: v.desc.trim() || label, cat: BOOKING_CAT[kind[1].type] || "Outros", bookType: kind[1].type, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "A orçar", refundable: true });
-      ui.tab = "custos";
-      commit();
-      toast(`${label}: na lista de custos, a orçar.`);
+    if (kind && kind[1]) {
+      /* item com reserva (hospedagem, passagem…): abre a ficha completa (datas, horários, localizador…); o valor digitado vem preenchido */
+      let costId;
+      if (amount == null) {
+        /* sem valor: fica em Custos como "a orçar" (lembrete) mesmo que a ficha seja cancelada */
+        costId = uid();
+        sc.costs.push({ id: costId, desc: v.desc.trim() || label, cat: BOOKING_CAT[kind[1].type] || "Outros", bookType: kind[1].type, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "A orçar", refundable: true });
+        ui.tab = "custos";
+        commit();
+      }
+      await editBooking(null, { type: kind[1].type, desc: v.desc.trim(), amount, sc, costId });
       return;
     }
+    if (amount == null) { await editCost(sc, null); return; }
     const desc = v.desc.trim() || label;
     const cost = { id: uid(), desc, cat: "Outros", amount, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "Estimado", refundable: true };
-    if (kind && kind[1]) {
-      const book = { id: uid(), done: false, type: kind[1].type, desc, amount, cur: "BRL", rate: 1, paidBy: "", date: "", dateEnd: "", locator: "", link: "", attachments: [], costSynced: true };
-      trip.bookings.push(book);
-      cost.bookingId = book.id;
-      cost.cat = BOOKING_CAT[book.type] || "Outros";
-    }
     sc.costs.push(cost);
     commit();
     toast("Item lançado no orçamento.");
