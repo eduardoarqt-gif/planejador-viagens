@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=50";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=50";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=50";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=50";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=51";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=51";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=51";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=51";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -175,10 +175,9 @@ function autoConcluir() {
    ela acompanha o destino (nome, noites e datas de entrada/saída). Depois de cotada ou reservada, não é mais mexida. */
 const scenarioStart = (t, sc) => (t.lockPeriod ? t.start : sc.start || t.baseStart || t.start) || "";
 function hotelPeriod(t, sc, seg) {
-  const total = sc.segments.reduce((n, s) => n + s.days, 0);
   const before = sc.segments.slice(0, sc.segments.indexOf(seg)).reduce((n, s) => n + s.days, 0);
   const start = scenarioStart(t, sc);
-  const nights = Math.max(1, seg.days - (before + seg.days >= total ? 1 : 0));
+  const nights = Math.max(1, seg.days - 1);
   return { nights, from: start ? addDays(start, before) : "", to: start ? addDays(start, before + nights) : "" };
 }
 function autoHotelCost(t, sc, seg) {
