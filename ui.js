@@ -1,4 +1,4 @@
-import { prepareFile, storeFile } from "./data.js?v=55";
+import { prepareFile, storeFile } from "./data.js?v=56";
 
 export const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 export const brl = value => money.format(value || 0);
@@ -28,7 +28,7 @@ const attIcon = a => (a.type || "").startsWith("image/") ? "🖼️" : "📄";
 export function ask(title, fields, { confirm = "Salvar", danger = false } = {}) {
   return new Promise(resolve => {
     const attach = {};
-    const wrap = (f, html) => f.showIf ? `<div data-showif="${esc(f.showIf[0])}" data-showval="${esc(f.showIf[1])}">${html}</div>` : html;
+    const wrap = (f, html) => f.showIf ? `<div data-showif="${esc(f.showIf[0])}" data-showval="${esc(f.showIf[1])}"${f.showIf[2] ? " data-shownot" : ""}>${html}</div>` : html;
     const body = fields.map(f => {
       if (f.type === "note") return wrap(f, `<p class="hint">${esc(f.label)}</p>`);
       if (f.type === "select") {
@@ -60,7 +60,8 @@ export function ask(title, fields, { confirm = "Salvar", danger = false } = {}) 
 
     const applyShow = () => sheetForm.querySelectorAll("[data-showif]").forEach(el => {
       const control = sheetForm.elements[el.dataset.showif];
-      el.hidden = !control || control.value !== el.dataset.showval;
+      const eq = !!control && (control.type === "checkbox" ? (control.checked ? "1" : "") : control.value) === el.dataset.showval;
+      el.hidden = el.hasAttribute("data-shownot") ? eq : !eq;
     });
     sheetForm.onchange = sheetForm.oninput = applyShow;
     applyShow();
