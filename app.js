@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=49";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=49";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=49";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=49";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=50";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=50";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=50";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=50";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -171,7 +171,36 @@ function autoConcluir() {
   if (feitas.length) commit(true);
   return feitas.length;
 }
-const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); syncTripDays(t); }); save(); render(keepScroll); };
+/* Hospedagem lançada sozinha ao criar um destino na rota (custo "a orçar", `autoHotel`): enquanto não houver valor nem reserva ligada,
+   ela acompanha o destino (nome, noites e datas de entrada/saída). Depois de cotada ou reservada, não é mais mexida. */
+const scenarioStart = (t, sc) => (t.lockPeriod ? t.start : sc.start || t.baseStart || t.start) || "";
+function hotelPeriod(t, sc, seg) {
+  const total = sc.segments.reduce((n, s) => n + s.days, 0);
+  const before = sc.segments.slice(0, sc.segments.indexOf(seg)).reduce((n, s) => n + s.days, 0);
+  const start = scenarioStart(t, sc);
+  const nights = Math.max(1, seg.days - (before + seg.days >= total ? 1 : 0));
+  return { nights, from: start ? addDays(start, before) : "", to: start ? addDays(start, before + nights) : "" };
+}
+function autoHotelCost(t, sc, seg) {
+  const p = hotelPeriod(t, sc, seg);
+  const desc = `Hospedagem · ${seg.city} (${plural(p.nights, "noite", "noites")})`;
+  return { id: uid(), desc, autoDesc: desc, cat: "Hospedagem", bookType: "Hotel", autoHotel: true, hotelFrom: p.from, hotelTo: p.to, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: seg.id, status: "A orçar", refundable: true };
+}
+function syncAutoHotels(t) {
+  if (!["rascunho", "planejada", "andamento"].includes(t.status)) return;
+  for (const sc of t.scenarios || []) {
+    sc.costs = sc.costs.filter(c => {
+      if (!c.autoHotel || c.bookingId || c.amount || c.status !== "A orçar") return true;
+      const seg = sc.segments.find(s => s.id === c.segId);
+      if (!seg) return false;
+      const fresh = autoHotelCost(t, sc, seg);
+      if (c.desc === c.autoDesc) c.desc = fresh.desc;
+      Object.assign(c, { autoDesc: fresh.autoDesc, hotelFrom: fresh.hotelFrom, hotelTo: fresh.hotelTo });
+      return true;
+    });
+  }
+}
+const commit = (keepScroll = false) => { state.trips.forEach(t => { syncLinkedCosts(t); syncMainDest(t); syncTripDays(t); syncAutoHotels(t); }); save(); render(keepScroll); };
 state.trips.forEach(syncTripDays);
 
 /* ---------- Home ---------- */
@@ -877,7 +906,7 @@ async function editBooking(b, pre = {}) {
     { name: "paidBy", label: "Quem pagou", type: "select", options: ["—", ...trip.travelers], value: b?.paidBy || "—" },
     { name: "date", label: "Data (início / entrada)", type: "date", value: b?.date ?? pre.date },
     { name: "checkinTime", label: "Horário de entrada (check-in)", type: "time", value: b?.checkinTime || HOTEL_CHECKIN, hint: "Sugestão padrão (14:00); ajuste se o hotel informou outro horário.", showIf: ["type", "Hotel"] },
-    { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd },
+    { name: "dateEnd", label: "Data final (saída), se houver", type: "date", value: b?.dateEnd ?? pre.dateEnd },
     { name: "checkoutTime", label: "Horário de saída (check-out)", type: "time", value: b?.checkoutTime || HOTEL_CHECKOUT, hint: "Sugestão padrão (12:00).", showIf: ["type", "Hotel"] },
     { name: "locator", label: "Localizador / confirmação", value: b?.locator },
     { name: "confirmed", label: "Confirmação recebida", type: "checkbox", value: !!b?.confirmed },
@@ -1368,12 +1397,14 @@ const actions = {
     const v = await ask("Novo destino", [
       { name: "city", label: "Destino", required: true, placeholder: "Ex.: Paris" },
       { name: "country", label: "País (opcional)", placeholder: trip0().country || "Ex.: França", hint: "Deixe vazio para escolher na lista de lugares." },
-      { name: "days", label: "Dias", type: "number", value: 3, min: 1 }
+      { name: "days", label: "Dias", type: "number", value: 3, min: 1 },
+      { name: "hotel", label: "Lançar hospedagem em Custos (a orçar) para este período", type: "checkbox", value: true, hint: "Fica como lembrete de cotar; as datas acompanham a rota enquanto não houver valor ou reserva." }
     ], { confirm: "Adicionar" });
     if (!v) return;
     const seg = { id: uid(), city: v.city.trim(), days: Math.max(1, Number(v.days) || 1) };
     if (v.country.trim()) seg.country = v.country.trim(); else await pickPlaceFor(seg);
     sc.segments.push(seg);
+    if (v.hotel) sc.costs.push(autoHotelCost(currentTrip(), sc, seg));
     await fitConcludedDays(currentTrip());
     commit(true);
   },
@@ -1424,7 +1455,7 @@ const actions = {
   async "cost-edit"(el) {
     const sc = findSc(el), cost = sc.costs.find(c => c.id === el.dataset.id);
     const type = cost.bookType || CAT_BOOKING[cost.cat];
-    if (cost.status === "A orçar" && !cost.amount && !cost.bookingId && type) { await editBooking(null, { type, desc: cost.desc !== cost.cat ? cost.desc : "", sc, costId: cost.id }); return; }
+    if (cost.status === "A orçar" && !cost.amount && !cost.bookingId && type) { await editBooking(null, { type, desc: cost.autoHotel || cost.desc === cost.cat ? "" : cost.desc, date: cost.hotelFrom, dateEnd: cost.hotelTo, sc, costId: cost.id }); return; }
     await editCost(sc, cost);
   },
   async "act-add"(el) { await editActivity(Number(el.dataset.day), null); },
