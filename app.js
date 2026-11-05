@@ -1,7 +1,7 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=54";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=54";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=54";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=54";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=55";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=55";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=55";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=55";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1493,8 +1493,14 @@ const actions = {
   async "sc-add-item"(el) {
     const sc = findSc(el);
     const trip = currentTrip();
+    /* hospedagem: escolher um destino já programado na rota (traz nome e datas de entrada/saída) */
+    const HOTEL_KIND = ITEM_KINDS.find(k => k[1]?.type === "Hotel")[0];
+    const NO_DEST = "Outro (informo as datas na ficha)";
+    const destSegs = sc.segments.filter(s => !s.transit);
+    const destLabel = s => { const p = hotelPeriod(trip, sc, s); return `${s.city}${p.from ? ` · ${fmtShort(p.from)} → ${fmtShort(p.to)} (${plural(p.nights, "noite", "noites")})` : ""}`; };
     const v = await ask("Adicionar item", [
       { name: "kind", label: "O que você quer lançar?", type: "select", options: ITEM_KINDS.map(k => k[0]), value: ITEM_KINDS[0][0] },
+      ...(destSegs.length ? [{ name: "dest", label: "Hospedagem em qual destino da rota?", type: "select", options: [...destSegs.map(destLabel), NO_DEST], value: destLabel(destSegs[0]), showIf: ["kind", HOTEL_KIND], hint: "Já preenche o nome e as datas de entrada e saída do destino." }] : []),
       { name: "desc", label: "Descrição (opcional)", placeholder: "Ex.: Gol SP → Natal" },
       { name: "amount", label: "Valor em reais (opcional) — passagem: por pessoa", type: "money", placeholder: "Ex.: 1.200 ou 600 x 2", hint: "Hospedagem, passagem, carro etc. abrem em seguida a ficha da reserva (datas, horários, localizador). Sem valor, fica em Custos como \"a orçar\" (lembrete)." }
     ], { confirm: "Continuar" });
@@ -1506,15 +1512,25 @@ const actions = {
     ui.scenarioId = sc.id;
     if (kind && kind[1]) {
       /* item com reserva (hospedagem, passagem…): abre a ficha completa (datas, horários, localizador…); o valor digitado vem preenchido */
-      let costId;
-      if (amount == null) {
+      let costId, desc = v.desc.trim(), date, dateEnd, seg = null;
+      if (kind[1].type === "Hotel" && v.dest && v.dest !== NO_DEST) {
+        seg = destSegs.find(s => destLabel(s) === v.dest) || null;
+        if (seg) {
+          const p = hotelPeriod(trip, sc, seg);
+          date = p.from; dateEnd = p.to;
+          if (!desc) desc = `Hospedagem · ${seg.city}`;
+          /* já existe o lembrete automático "a orçar" desse destino? usa ele em vez de duplicar */
+          const auto = sc.costs.find(c => c.autoHotel && c.segId === seg.id && !c.bookingId && !c.amount && c.status === "A orçar");
+          if (auto) { costId = auto.id; auto.desc = desc; auto.autoDesc = ""; }
+        }
+      }
+      if (amount == null && !costId) {
         /* sem valor: fica em Custos como "a orçar" (lembrete) mesmo que a ficha seja cancelada */
         costId = uid();
-        sc.costs.push({ id: costId, desc: v.desc.trim() || label, cat: BOOKING_CAT[kind[1].type] || "Outros", bookType: kind[1].type, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: "", status: "A orçar", refundable: true });
-        ui.tab = "custos";
-        commit();
+        sc.costs.push({ id: costId, desc: desc || label, cat: BOOKING_CAT[kind[1].type] || "Outros", bookType: kind[1].type, amount: 0, cur: "BRL", rate: 1, perPerson: false, segId: seg ? seg.id : "", status: "A orçar", refundable: true });
       }
-      await editBooking(null, { type: kind[1].type, desc: v.desc.trim(), amount, sc, costId });
+      if (costId) { ui.tab = "custos"; commit(); }
+      await editBooking(null, { type: kind[1].type, desc, amount, sc, costId, date, dateEnd });
       return;
     }
     if (amount == null) { await editCost(sc, null); return; }
