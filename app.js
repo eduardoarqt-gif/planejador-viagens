@@ -1,7 +1,8 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=56";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=56";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=56";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=56";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=57";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=57";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=57";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=57";
+import { nearbyAttractions, otmKey, setOtmKey, swipeDeck, planDays, suggestTime } from "./descobrir.js?v=57";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -563,7 +564,7 @@ function tabItinerary(trip) {
   let last = null;
   const html = days.map((day, i) => {
     const resumoLife = day.city !== last && !day.transit && day.city !== "A definir" ? lifeSummary(day.city) : "";
-    const header = day.city !== last ? `<div class="city-sep">${esc(day.city)}${day.transit || day.city === "A definir" ? "" : `<button class="btn soft sm city-life" data-act="life-city" data-city="${esc(day.city)}" data-day="${i}">📍 Lugares do Life${resumoLife ? ` · ${resumoLife}` : ""}</button>`}</div>` : "";
+    const header = day.city !== last ? `<div class="city-sep">${esc(day.city)}${day.transit || day.city === "A definir" ? "" : `<button class="btn soft sm city-life" data-act="life-city" data-city="${esc(day.city)}" data-day="${i}">📍 Lugares do Life${resumoLife ? ` · ${resumoLife}` : ""}</button><button class="btn soft sm city-life" data-act="discover" data-city="${esc(day.city)}" data-day="${i}">🃏 Descobrir atrações</button>`}</div>` : "";
     last = day.city;
     return `${header}<article class="day">
       <div class="day-head"><div><span class="day-n">Dia ${i + 1}</span>${trip.start ? `<span class="muted"> · ${fmtDay(dayISO(trip, i))}</span>` : ""}</div><span class="wx" data-wx="${i}"></span></div>
@@ -1194,6 +1195,61 @@ function lifeSummary(city) {
   const conhecer = list.filter(p => p.status === "quero_conhecer").length, repetir = list.filter(p => p.status === "quero_repetir").length;
   return [conhecer ? `${conhecer} p/ conhecer` : "", repetir ? `${repetir} p/ repetir` : "", !conhecer && !repetir ? plural(list.length, "lugar", "lugares") : ""].filter(Boolean).join(" · ");
 }
+/* Descobrir atrações: cartões de deslizar (seus lugares do Life + atrações populares do OpenTripMap) → roteiro por proximidade */
+async function discoverCity(el) {
+  const trip = currentTrip(), city = el.dataset.city;
+  const dayIdx = dayList(trip).map((d, i) => ({ i, city: d.city })).filter(d => d.city === city).map(d => d.i);
+  if (!dayIdx.length) return;
+  toast("Buscando atrações…");
+  const geo = await geoOfCity(trip, city).catch(() => null);
+  const life = await getLifePlaces().then(d => lifeForCity(d.itens, city).filter(p => ["quero_conhecer", "quero_repetir", "favorito"].includes(p.status))).catch(() => []);
+  let wiki = [];
+  if (geo) {
+    if (!otmKey()) {
+      const k = await ask("Atrações populares (opcional)", [
+        { name: "_n", type: "note", label: "Para sugerir atrações populares com foto e nota, o Trips usa o OpenTripMap (gratuito). Crie uma chave grátis em opentripmap.io (menu \"Get API key\") e cole abaixo; ela fica só neste aparelho. Sem chave, aparecem só os seus lugares do Dudoo Life." },
+        { name: "key", label: "Chave do OpenTripMap", placeholder: "Cole aqui (ou deixe vazio para pular)" }
+      ], { confirm: "Continuar" });
+      if (k?.key?.trim()) setOtmKey(k.key);
+    }
+    try { wiki = (await nearbyAttractions(geo.lat, geo.lon)) || []; }
+    catch (err) { if (err.message === "chave") { setOtmKey(""); toast("A chave do OpenTripMap não foi aceita. Confira e tente de novo."); } else toast("Não consegui buscar atrações populares agora."); }
+  }
+  const memo = ((trip.discover ||= {})[normName(city)] ||= { no: [] });
+  const had = new Set([...trip.places.map(p => normName(p.name)), ...Object.values(trip.itinerary).flat().map(a => normName(a.title))]);
+  const lifeIds = new Set(Object.values(trip.itinerary).flat().map(a => a.lifeId).filter(Boolean));
+  const lifeNames = new Set(life.map(p => normName(p.nome)));
+  const cards = [
+    ...life.filter(p => !lifeIds.has(p.id) && !memo.no.includes("life:" + p.id)).sort((a, b) => lifeOrder(a.status, LIFE_ORDER_ST) - lifeOrder(b.status, LIFE_ORDER_ST))
+      .map(p => ({ key: "life:" + p.id, kind: "life", name: p.nome, desc: [(LIFE_CAT[p.categoria] || LIFE_CAT.outro)[1], p.culinaria, p.notas].filter(Boolean).join(" · "), badge: `📍 No seu Life${LIFE_ST_MARK[p.status] ? " · " + LIFE_ST_MARK[p.status] : ""}`, lat: p.lat, lon: p.lon, life: p })),
+    ...wiki.filter(a => !had.has(normName(a.title)) && !lifeNames.has(normName(a.title)) && !memo.no.includes("wiki:" + a.lang + ":" + a.title))
+      .map(a => ({ key: "wiki:" + a.lang + ":" + a.title, kind: "wiki", name: a.title, desc: a.desc, img: a.img, url: a.url, badge: "⭐ Popular na região", lat: a.lat, lon: a.lon }))
+  ];
+  if (!cards.length) { await ask(`Atrações de ${city}`, [{ name: "_e", type: "note", label: geo ? "Não encontrei atrações novas para este destino (ou você já viu todas). Cadastre lugares no Dudoo Life para aparecerem aqui." : "Não achei as coordenadas deste destino. Edite o destino na rota para escolher o lugar certo." }], { confirm: "OK" }); return; }
+  const r = await swipeDeck(cards, `Atrações · ${city}`);
+  r.no.forEach(c => { if (!memo.no.includes(c.key)) memo.no.push(c.key); });
+  if (!r.yes.length) { commit(true); return; }
+  const plan = planDays(r.yes, dayIdx.length);
+  const line = (d, list) => `Dia ${d + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, d))}` : ""}: ${list.length ? list.map(c => c.name).join(" → ") : "livre"}`;
+  const ok = await ask(`Roteiro de ${city}`, [
+    { name: "_n", type: "note", label: `${plural(r.yes.length, "atração escolhida", "atrações escolhidas")}, agrupadas por proximidade. Os dias ficam com horários sugeridos, e você ajusta depois.` },
+    ...plan.map((list, k) => ({ name: `_d${k}`, type: "note", label: line(dayIdx[k], list) }))
+  ], { confirm: "Adicionar ao roteiro" });
+  if (!ok) { commit(true); return; }
+  let n = 0;
+  plan.forEach((list, k) => {
+    const day = dayIdx[k];
+    list.forEach((c, j) => {
+      const act = (trip.itinerary[day] ||= []);
+      if (c.kind === "life") { n += addLifeToDay(trip, day, city, [c.life]); const a = act.find(x => x.lifeId === c.life.id); if (a && !a.time) a.time = suggestTime(j); return; }
+      act.push({ id: uid(), time: suggestTime(j), title: c.name, cost: 0, note: [c.desc, c.url].filter(Boolean).join(" · "), wiki: c.key });
+      trip.places.push({ id: uid(), name: c.name, city, lat: c.lat, lon: c.lon, day, visited: false, wiki: c.key });
+      n += 1;
+    });
+  });
+  commit(true);
+  toast(`${plural(n, "atração adicionada", "atrações adicionadas")} ao roteiro e ao mapa.`);
+}
 async function lifeCity(el) {
   const trip = currentTrip(), city = el.dataset.city;
   let data;
@@ -1666,6 +1722,10 @@ const actions = {
   /* destinos */
   async "dest-add"() { await editDest(null); },
   async "dest-menu"(el) { await editDest(destById(el.dataset.id)); },
+  async "discover"(el) {
+    try { await discoverCity(el); }
+    catch (err) { console.error(err); toast("Não consegui abrir as atrações."); }
+  },
   async "life-city"(el) {
     try { await lifeCity(el); }
     catch (err) { console.error(err); toast("Não consegui abrir os lugares do Life."); }
