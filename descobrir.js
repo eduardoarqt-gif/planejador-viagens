@@ -1,6 +1,6 @@
 /* Descobrir atrações: busca atrações perto do destino (OpenTripMap), baralho de cartões
    para deslizar (direita = quero, esquerda = não) e montador de roteiro por proximidade. */
-import { esc } from "./ui.js?v=58";
+import { esc } from "./ui.js?v=59";
 
 const TTL = 7 * 24 * 3600e3;
 const rad = x => x * Math.PI / 180;
@@ -19,7 +19,7 @@ const kindLabel = kinds => [...new Set((kinds || "").split(",").map(k => OTM_KIN
 const getJson = async url => { const r = await fetch(url); if (r.status === 401 || r.status === 403) throw new Error("chave"); if (!r.ok) throw new Error(r.status); return r.json(); };
 
 /** Atrações perto do ponto, das mais bem avaliadas para as menos. Devolve null se não há chave; lança "chave" se a chave não vale. */
-export async function nearbyAttractions(lat, lon) {
+async function otmAttractions(lat, lon) {
   const key = otmKey();
   if (!key) return null;
   const ck = `disc2:${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -34,6 +34,67 @@ export async function nearbyAttractions(lat, lon) {
   }))).sort((a, b) => b.views - a.views || !!b.img - !!a.img);
   try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: out })); } catch { /* cheio */ }
   return out;
+}
+
+/* Google Places API (novo): as atrações mais bem avaliadas, com nota, foto e horário de funcionamento. Chave pessoal, guardada só neste aparelho. */
+const G_KEY = "planejador-google-places";
+export const googleKey = () => { try { return localStorage.getItem(G_KEY) || ""; } catch { return ""; } };
+export const setGoogleKey = k => { try { if (k) localStorage.setItem(G_KEY, k.trim()); else localStorage.removeItem(G_KEY); } catch { /* ignora */ } };
+const G_FIELDS = ["id", "displayName", "location", "rating", "userRatingCount", "photos", "regularOpeningHours", "primaryTypeDisplayName", "editorialSummary", "googleMapsUri", "types", "businessStatus"].map(f => `places.${f}`).join(",");
+const G_SKIP = /lodging|travel_agency|real_estate|car_rental|car_dealer|store$|school|hospital|doctor|bank|atm|gas_station|parking/;
+async function gSearch(key, text, lat, lon) {
+  const r = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": G_FIELDS },
+    body: JSON.stringify({ textQuery: text, languageCode: "pt-BR", pageSize: 20, locationBias: { circle: { center: { latitude: lat, longitude: lon }, radius: 20000 } } })
+  });
+  if (!r.ok) {
+    let msg = ""; try { msg = (await r.json()).error?.message || ""; } catch { /* sem corpo */ }
+    const e = new Error(/api key|referer|not authorized|blocked|permission|disabled|billing/i.test(msg) || r.status === 401 || r.status === 403 ? "chave" : String(r.status));
+    e.detail = msg; throw e;
+  }
+  return (await r.json()).places || [];
+}
+/** horários → { 0: [[abre, fecha]…] … 6 } em minutos (0 = domingo); null se o Google não informa. */
+function gHours(h) {
+  const per = h?.periods;
+  if (!per || !per.length) return null;
+  const out = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+  if (per.length === 1 && per[0].open && !per[0].close) { for (let d = 0; d < 7; d += 1) out[d].push([0, 1440]); return out; }
+  for (const p of per) {
+    if (!p.open || !p.close) continue;
+    const o = p.open.hour * 60 + (p.open.minute || 0), c = p.close.hour * 60 + (p.close.minute || 0);
+    if (p.close.day === p.open.day && c > o) out[p.open.day].push([o, c]);
+    else out[p.open.day].push([o, 1440]);
+  }
+  return out;
+}
+const gCount = n => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(".", ",")} mil` : String(n));
+export async function googleAttractions(key, lat, lon, city, country) {
+  const ck = `disc3:${(city || "").toLowerCase()}|${lat.toFixed(2)},${lon.toFixed(2)}`;
+  try { const c = JSON.parse(localStorage.getItem(ck)); if (c && Date.now() - c.t < TTL) return c.d; } catch { /* sem cache */ }
+  const where = [city, country].filter(Boolean).join(", ");
+  const lists = await Promise.all([`principais pontos turísticos em ${where}`, `o que fazer em ${where}`].map(q => gSearch(key, q, lat, lon)));
+  const seen = new Set();
+  const out = lists.flat().filter(p => p.id && !seen.has(p.id) && seen.add(p.id) && p.location && p.displayName?.text
+    && p.businessStatus !== "CLOSED_PERMANENTLY" && (p.rating || 0) >= 4.2 && (p.userRatingCount || 0) >= 300 && !(p.types || []).some(t => G_SKIP.test(t)))
+    .sort((a, b) => b.rating * Math.log10(b.userRatingCount + 1) - a.rating * Math.log10(a.userRatingCount + 1))
+    .slice(0, 36)
+    .map(p => ({
+      id: p.id, title: p.displayName.text, lat: p.location.latitude, lon: p.location.longitude, lang: "g", kinds: (p.types || []).join(","),
+      desc: [p.primaryTypeDisplayName?.text, (p.editorialSummary?.text || "").slice(0, 140)].filter(Boolean).join(" · "),
+      img: p.photos?.[0]?.name ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?maxWidthPx=640&key=${encodeURIComponent(key)}` : "",
+      rating: p.rating, count: p.userRatingCount, hours: gHours(p.regularOpeningHours), url: p.googleMapsUri || ""
+    }));
+  try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: out })); } catch { /* cheio */ }
+  return out;
+}
+
+/** Atrações do destino: Google (se houver chave), senão OpenTripMap. Devolve null sem nenhuma chave; lança "chave" se a chave não vale. */
+export async function nearbyAttractions(lat, lon, city, country) {
+  const g = googleKey();
+  if (g) { try { return await googleAttractions(g, lat, lon, city, country); } catch (e) { if (!otmKey()) throw e; } }
+  return otmAttractions(lat, lon);
 }
 
 /* ---------- baralho de cartões ---------- */
@@ -125,10 +186,13 @@ export function estimateMins(c) {
   if (/theme_park|amusement_park|water_park|disney|universal|legoland|seaworld|studios/.test(t)) return 360;
   if (/zoo|aquarium|aqu[aá]rio|zool/.test(t)) return 180;
   if (/museum|museu|gallery|galeria/.test(t)) return 120;
+  if (/shopping_mall|outlet/.test(t)) return 120;
+  if (/restaurant|bar\b|night_club/.test(t)) return 90;
+  if (/cafe|bakery/.test(t)) return 45;
   if (/stadium|est[aá]dio|arena/.test(t)) return 90;
   if (/beach|praia|natural|nature|reserve|park|parque|garden|jardim/.test(t)) return 120;
   if (/tower|viewpoint|mirante|observ/.test(t)) return 60;
-  if (/religion|church|igreja|cathedral|catedral|temple/.test(t)) return 30;
+  if (/religion|church|igreja|cathedral|catedral|temple|place_of_worship/.test(t)) return 30;
   if (/monument|memorial|fountain|bridge|historic|architecture|statue|square|plaza|praça/.test(t)) return 40;
   return 75;
 }
@@ -143,45 +207,55 @@ export const fmtClock = m => `${String(Math.min(23, Math.floor(m / 60))).padStar
 export const fmtDur = m => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, "0") : ""}` : `${m} min`);
 const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
+/** Primeiro horário a partir de `t` em que o lugar abre e ainda dá tempo de visitar; null se fechado nesse dia. */
+function openStart(p, dow, t, mins) {
+  const iv = p.hours && dow != null ? p.hours[dow] : null;
+  if (!p.hours || dow == null) return t;
+  if (!iv || !iv.length) return null;
+  for (const [o, c] of [...iv].sort((a, b) => a[0] - b[0])) { const s = Math.max(t, o); if (s + Math.min(mins, 45) <= c) return s; }
+  return null;
+}
+
 /**
- * Distribui os lugares pelos dias respeitando o tempo disponível.
- * dias: [{ start, end (minutos desde 00:00), busy: [[de, até]…] (atividades já marcadas), loose (minutos de atividades sem horário), anchor {lat,lon}|null }]
- * Devolve { days: [[{ place, time, mins, travel }…]…], left: [lugares que não couberam] }.
+ * Distribui os lugares pelos dias respeitando tempo, deslocamento, atividades já marcadas e horário de funcionamento.
+ * dias: [{ start, end (minutos desde 00:00), busy: [[de, até]…], loose (minutos de atividades sem horário), anchor {lat,lon}|null, dow (0=domingo…6)|null }]
+ * Devolve { days: [[{ place, time, mins, travel }…]…], left: [lugares que não couberam, com `why`] }.
  */
 export function planDays(places, days) {
   const pool = places.map(p => ({ ...p, mins: estimateMins(p) }));
   const cap = days.map(d => Math.max(0, d.end - d.start - d.busy.reduce((s, [a, b]) => s + overlap(a, b, d.start, d.end), 0) - (d.loose || 0)));
   const total = pool.reduce((s, p) => s + p.mins + 20, 0), totalCap = cap.reduce((a, b) => a + b, 0) || 1;
   const share = Math.min(1, total / totalCap * 1.15 + 0.05);
-  const picks = days.map(d => ({ items: [], used: 0, cur: d.anchor || null }));
-  const cen = pool.filter(has).length ? { lat: pool.filter(has).reduce((s, p) => s + p.lat, 0) / pool.filter(has).length, lon: pool.filter(has).reduce((s, p) => s + p.lon, 0) / pool.filter(has).length } : null;
-  const run = limits => picks.forEach((pk, k) => {
+  const geoPool = pool.filter(has);
+  const cen = geoPool.length ? { lat: geoPool.reduce((s, p) => s + p.lat, 0) / geoPool.length, lon: geoPool.reduce((s, p) => s + p.lon, 0) / geoPool.length } : null;
+  const st = days.map(d => ({ items: [], used: 0, cur: d.anchor || null, t: d.start }));
+  const run = limits => st.forEach((s, k) => {
+    const d = days[k], busy = [...d.busy].sort((a, b) => a[0] - b[0]), endLimit = d.end - (d.loose || 0);
     const skip = new Set();
     while (true) {
       const cand = pool.filter(p => !skip.has(p));
       if (!cand.length) break;
       let p;
-      if (pk.cur) p = cand.reduce((a, b) => (travelMins(pk.cur, b) < travelMins(pk.cur, a) ? b : a));
-      else p = cand.filter(has).length && cen ? cand.filter(has).reduce((a, b) => (km(cen, b) > km(cen, a) ? b : a)) : cand[0];
-      const t = pk.cur ? travelMins(pk.cur, p) : 0;
-      if (pk.used + t + p.mins > limits[k]) { skip.add(p); continue; }
-      pk.items.push({ place: p, travel: t, mins: p.mins }); pk.used += t + p.mins; if (has(p)) pk.cur = p;
+      if (s.cur) p = cand.reduce((a, b) => (travelMins(s.cur, b) < travelMins(s.cur, a) ? b : a));
+      else p = geoPool.length && cen && cand.some(has) ? cand.filter(has).reduce((a, b) => (km(cen, b) > km(cen, a) ? b : a)) : cand[0];
+      const travel = s.cur ? travelMins(s.cur, p) : 0;
+      let t = s.t + travel;
+      for (let g = 0; g < 20; g += 1) {
+        const b = busy.find(x => overlap(t, t + p.mins, x[0], x[1]) > 0);
+        const o = b ? null : openStart(p, d.dow, t, p.mins);
+        if (b) { t = b[1]; continue; }
+        if (o == null) { t = Infinity; break; }
+        if (o !== t) { t = o; continue; }
+        break;
+      }
+      if (!Number.isFinite(t) || t + p.mins > endLimit || s.used + travel + p.mins > limits[k]) { skip.add(p); continue; }
+      s.items.push({ place: p, time: fmtClock(t), mins: p.mins, travel });
+      s.used += travel + p.mins; s.t = t + p.mins; if (has(p)) s.cur = p;
       pool.splice(pool.indexOf(p), 1);
     }
   });
   run(cap.map(c => Math.floor(c * share)));
   run(cap);
-  /* horários: da abertura do dia, pulando o que já está marcado */
-  const out = days.map((d, k) => {
-    const busy = [...d.busy].sort((a, b) => a[0] - b[0]);
-    let t = d.start;
-    return picks[k].items.map(({ place, travel, mins }) => {
-      t += travel;
-      for (let guard = 0; guard < 20; guard += 1) { const b = busy.find(x => overlap(t, t + mins, x[0], x[1]) > 0); if (!b) break; t = b[1]; }
-      const row = { place, time: fmtClock(t), mins, travel };
-      t += mins;
-      return row;
-    });
-  });
-  return { days: out, left: pool };
+  const closed = p => p.hours && days.length && days.every(d => d.dow != null && !(p.hours[d.dow] || []).length);
+  return { days: st.map(s => s.items), left: pool.map(p => ({ ...p, why: closed(p) ? "fechado nesses dias" : "sem tempo" })) };
 }

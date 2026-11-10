@@ -1,8 +1,8 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=58";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=58";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=58";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=58";
-import { nearbyAttractions, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=58";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=59";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=59";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=59";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=59";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=59";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1205,15 +1205,20 @@ async function discoverCity(el) {
   const life = await getLifePlaces().then(d => lifeForCity(d.itens, city).filter(p => ["quero_conhecer", "quero_repetir", "favorito"].includes(p.status))).catch(() => []);
   let wiki = [];
   if (geo) {
-    if (!otmKey()) {
+    if (!googleKey() && !otmKey()) {
       const k = await ask("Atrações populares (opcional)", [
-        { name: "_n", type: "note", label: "Para sugerir atrações populares com foto e nota, o Trips usa o OpenTripMap (gratuito). Crie uma chave grátis em opentripmap.io (menu \"Get API key\") e cole abaixo; ela fica só neste aparelho. Sem chave, aparecem só os seus lugares do Dudoo Life." },
-        { name: "key", label: "Chave do OpenTripMap", placeholder: "Cole aqui (ou deixe vazio para pular)" }
+        { name: "_n", type: "note", label: "Para sugerir as atrações mais bem avaliadas, com foto, nota e horário de funcionamento, o Trips usa o Google Places. Crie sua chave seguindo 00_DOCUMENTACAO/COMO_CRIAR_CHAVE_GOOGLE_PLACES.md e cole abaixo; ela fica só neste aparelho. Sem chave, aparecem só os seus lugares do Dudoo Life." },
+        { name: "key", label: "Chave do Google Places", placeholder: "Cole aqui (ou deixe vazio para pular)" },
+        { name: "otm", label: "Ou chave do OpenTripMap (gratuita, menos completa)", placeholder: "Opcional" }
       ], { confirm: "Continuar" });
-      if (k?.key?.trim()) setOtmKey(k.key);
+      if (k?.key?.trim()) setGoogleKey(k.key); else if (k?.otm?.trim()) setOtmKey(k.otm);
     }
-    try { wiki = (await nearbyAttractions(geo.lat, geo.lon)) || []; }
-    catch (err) { if (err.message === "chave") { setOtmKey(""); toast("A chave do OpenTripMap não foi aceita. Confira e tente de novo."); } else toast("Não consegui buscar atrações populares agora."); }
+    try { wiki = (await nearbyAttractions(geo.lat, geo.lon, city, countryOfCity(trip, city))) || []; }
+    catch (err) {
+      console.warn("atrações:", err.message, err.detail || "");
+      if (err.message === "chave") { if (googleKey()) setGoogleKey(""); else setOtmKey(""); toast(`A chave não foi aceita${err.detail ? `: ${err.detail.slice(0, 120)}` : "."} Tente de novo com outra chave.`); }
+      else toast("Não consegui buscar atrações populares agora.");
+    }
   }
   const memo = ((trip.discover ||= {})[normName(city)] ||= { no: [] });
   const had = new Set([...trip.places.map(p => normName(p.name)), ...Object.values(trip.itinerary).flat().map(a => normName(a.title))]);
@@ -1223,7 +1228,7 @@ async function discoverCity(el) {
     ...life.filter(p => !lifeIds.has(p.id) && !memo.no.includes("life:" + p.id)).sort((a, b) => lifeOrder(a.status, LIFE_ORDER_ST) - lifeOrder(b.status, LIFE_ORDER_ST))
       .map(p => ({ key: "life:" + p.id, kind: "life", name: p.nome, desc: [(LIFE_CAT[p.categoria] || LIFE_CAT.outro)[1], p.culinaria, p.notas].filter(Boolean).join(" · "), badge: `📍 No seu Life${LIFE_ST_MARK[p.status] ? " · " + LIFE_ST_MARK[p.status] : ""}`, lat: p.lat, lon: p.lon, life: p })),
     ...wiki.filter(a => !had.has(normName(a.title)) && !lifeNames.has(normName(a.title)) && !memo.no.includes("wiki:" + a.lang + ":" + a.title))
-      .map(a => ({ key: "wiki:" + a.lang + ":" + a.title, kind: "wiki", name: a.title, desc: a.desc, img: a.img, url: a.url, badge: "⭐ Popular na região", lat: a.lat, lon: a.lon, kinds: a.kinds }))
+      .map(a => ({ key: "wiki:" + a.lang + ":" + a.title, kind: "wiki", name: a.title, desc: a.desc, img: a.img, url: a.url, badge: a.rating ? `⭐ ${String(a.rating).replace(".", ",")} · ${a.count >= 1000 ? `${Math.round(a.count / 100) / 10} mil`.replace(".", ",") : a.count} avaliações` : "⭐ Popular na região", lat: a.lat, lon: a.lon, kinds: a.kinds, hours: a.hours }))
   ];
   if (!cards.length) { await ask(`Atrações de ${city}`, [{ name: "_e", type: "note", label: geo ? "Não encontrei atrações novas para este destino (ou você já viu todas). Cadastre lugares no Dudoo Life para aparecerem aqui." : "Não achei as coordenadas deste destino. Edite o destino na rota para escolher o lugar certo." }], { confirm: "OK" }); return; }
   const r = await swipeDeck(cards, `Atrações · ${city}`);
@@ -1246,15 +1251,15 @@ async function discoverCity(el) {
       if (t0 == null) loose += dur; else busy.push([t0, t0 + dur]);
     }
     const anchor = pins.length ? { lat: pins.reduce((s, p) => s + p.lat, 0) / pins.length, lon: pins.reduce((s, p) => s + p.lon, 0) / pins.length } : null;
-    return { start, end, busy, loose, anchor, had: n };
+    return { start, end, busy, loose, anchor, had: n, dow: date ? new Date(`${date}T12:00:00`).getDay() : null };
   });
   const plan = planDays(r.yes, info);
   const line = (k, rows) => `Dia ${dayIdx[k] + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, dayIdx[k]))}` : ""}${info[k].had ? ` (já tem ${plural(info[k].had, "atividade", "atividades")})` : ""}: ${rows.length ? rows.map(x => `${x.time} ${x.place.name} (${fmtDur(x.mins)})`).join(" → ") : "livre"}`;
   const ok = await ask(`Roteiro de ${city}`, [
     { name: "_n", type: "note", label: `${plural(r.yes.length - plan.left.length, "atração cabe", "atrações cabem")} no tempo disponível, agrupadas por proximidade.` },
     ...plan.days.map((rows, k) => ({ name: `_d${k}`, type: "note", label: line(k, rows) })),
-    ...(plan.left.length ? [{ name: "_l", type: "note", label: `Não couberam (ficam de fora): ${plan.left.map(c => c.name).join(", ")}. Dê mais dias ao destino ou tire algum item do dia.` }] : []),
-    { name: "_a", type: "note", label: "Cálculo: tempo no local estimado pelo tipo de lugar; deslocamento estimado (a pé até ~1,2 km, depois de carro/app); dia das 09:30 às 20:00, com chegada e partida mais leves e as atividades que você já marcou descontadas. Ajuste os horários depois." }
+    ...(plan.left.length ? [{ name: "_l", type: "note", label: `Não couberam (ficam de fora): ${plan.left.map(c => `${c.name} (${c.why})`).join(", ")}. Dê mais dias ao destino ou tire algum item do dia.` }] : []),
+    { name: "_a", type: "note", label: "Cálculo: tempo no local estimado pelo tipo de lugar; horário de funcionamento respeitado quando o Google informa; deslocamento estimado (a pé até ~1,2 km, depois de carro/app); dia das 09:30 às 20:00, com chegada e partida mais leves e as atividades que você já marcou descontadas. Ajuste os horários depois." }
   ], { confirm: plan.days.some(d => d.length) ? "Adicionar ao roteiro" : "Fechar" });
   if (!ok || !plan.days.some(d => d.length)) { commit(true); return; }
   let n = 0;
