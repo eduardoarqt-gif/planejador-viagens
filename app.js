@@ -1,8 +1,8 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=57";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=57";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=57";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=57";
-import { nearbyAttractions, otmKey, setOtmKey, swipeDeck, planDays, suggestTime } from "./descobrir.js?v=57";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=58";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=58";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=58";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=58";
+import { nearbyAttractions, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=58";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -1223,26 +1223,47 @@ async function discoverCity(el) {
     ...life.filter(p => !lifeIds.has(p.id) && !memo.no.includes("life:" + p.id)).sort((a, b) => lifeOrder(a.status, LIFE_ORDER_ST) - lifeOrder(b.status, LIFE_ORDER_ST))
       .map(p => ({ key: "life:" + p.id, kind: "life", name: p.nome, desc: [(LIFE_CAT[p.categoria] || LIFE_CAT.outro)[1], p.culinaria, p.notas].filter(Boolean).join(" · "), badge: `📍 No seu Life${LIFE_ST_MARK[p.status] ? " · " + LIFE_ST_MARK[p.status] : ""}`, lat: p.lat, lon: p.lon, life: p })),
     ...wiki.filter(a => !had.has(normName(a.title)) && !lifeNames.has(normName(a.title)) && !memo.no.includes("wiki:" + a.lang + ":" + a.title))
-      .map(a => ({ key: "wiki:" + a.lang + ":" + a.title, kind: "wiki", name: a.title, desc: a.desc, img: a.img, url: a.url, badge: "⭐ Popular na região", lat: a.lat, lon: a.lon }))
+      .map(a => ({ key: "wiki:" + a.lang + ":" + a.title, kind: "wiki", name: a.title, desc: a.desc, img: a.img, url: a.url, badge: "⭐ Popular na região", lat: a.lat, lon: a.lon, kinds: a.kinds }))
   ];
   if (!cards.length) { await ask(`Atrações de ${city}`, [{ name: "_e", type: "note", label: geo ? "Não encontrei atrações novas para este destino (ou você já viu todas). Cadastre lugares no Dudoo Life para aparecerem aqui." : "Não achei as coordenadas deste destino. Edite o destino na rota para escolher o lugar certo." }], { confirm: "OK" }); return; }
   const r = await swipeDeck(cards, `Atrações · ${city}`);
   r.no.forEach(c => { if (!memo.no.includes(c.key)) memo.no.push(c.key); });
   if (!r.yes.length) { commit(true); return; }
-  const plan = planDays(r.yes, dayIdx.length);
-  const line = (d, list) => `Dia ${d + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, d))}` : ""}: ${list.length ? list.map(c => c.name).join(" → ") : "livre"}`;
+  /* tempo disponível de cada dia do destino: janela 09:30–20:00, chegada/partida mais leves, menos o que já está no roteiro */
+  const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const info = dayIdx.map((d, k) => {
+    let start = 570, end = 1200;
+    if (dayIdx.length > 1) { if (k === 0) start = 780; if (k === dayIdx.length - 1) end = 840; } else end = 1080;
+    const date = trip.start ? dayISO(trip, d) : "";
+    const voo = date ? trip.bookings.filter(b => b.type === "Voo" && (b.date === date || b.dateEnd === date)).length : 0;
+    if (voo && k === 0) start = Math.max(start, 960);
+    if (voo && k === dayIdx.length - 1 && dayIdx.length > 1) end = Math.min(end, 660);
+    const busy = [], pins = trip.places.filter(p => p.day === d && p.lat != null);
+    let loose = 0, n = 0;
+    for (const a of [...(trip.itinerary[d] || []), ...hotelItems(trip, d)]) {
+      const dur = a.hotel ? 30 : a.mins || 90, t0 = toMin(a.time);
+      n += 1;
+      if (t0 == null) loose += dur; else busy.push([t0, t0 + dur]);
+    }
+    const anchor = pins.length ? { lat: pins.reduce((s, p) => s + p.lat, 0) / pins.length, lon: pins.reduce((s, p) => s + p.lon, 0) / pins.length } : null;
+    return { start, end, busy, loose, anchor, had: n };
+  });
+  const plan = planDays(r.yes, info);
+  const line = (k, rows) => `Dia ${dayIdx[k] + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, dayIdx[k]))}` : ""}${info[k].had ? ` (já tem ${plural(info[k].had, "atividade", "atividades")})` : ""}: ${rows.length ? rows.map(x => `${x.time} ${x.place.name} (${fmtDur(x.mins)})`).join(" → ") : "livre"}`;
   const ok = await ask(`Roteiro de ${city}`, [
-    { name: "_n", type: "note", label: `${plural(r.yes.length, "atração escolhida", "atrações escolhidas")}, agrupadas por proximidade. Os dias ficam com horários sugeridos, e você ajusta depois.` },
-    ...plan.map((list, k) => ({ name: `_d${k}`, type: "note", label: line(dayIdx[k], list) }))
-  ], { confirm: "Adicionar ao roteiro" });
-  if (!ok) { commit(true); return; }
+    { name: "_n", type: "note", label: `${plural(r.yes.length - plan.left.length, "atração cabe", "atrações cabem")} no tempo disponível, agrupadas por proximidade.` },
+    ...plan.days.map((rows, k) => ({ name: `_d${k}`, type: "note", label: line(k, rows) })),
+    ...(plan.left.length ? [{ name: "_l", type: "note", label: `Não couberam (ficam de fora): ${plan.left.map(c => c.name).join(", ")}. Dê mais dias ao destino ou tire algum item do dia.` }] : []),
+    { name: "_a", type: "note", label: "Cálculo: tempo no local estimado pelo tipo de lugar; deslocamento estimado (a pé até ~1,2 km, depois de carro/app); dia das 09:30 às 20:00, com chegada e partida mais leves e as atividades que você já marcou descontadas. Ajuste os horários depois." }
+  ], { confirm: plan.days.some(d => d.length) ? "Adicionar ao roteiro" : "Fechar" });
+  if (!ok || !plan.days.some(d => d.length)) { commit(true); return; }
   let n = 0;
-  plan.forEach((list, k) => {
+  plan.days.forEach((rows, k) => {
     const day = dayIdx[k];
-    list.forEach((c, j) => {
+    rows.forEach(({ place: c, time, mins }) => {
       const act = (trip.itinerary[day] ||= []);
-      if (c.kind === "life") { n += addLifeToDay(trip, day, city, [c.life]); const a = act.find(x => x.lifeId === c.life.id); if (a && !a.time) a.time = suggestTime(j); return; }
-      act.push({ id: uid(), time: suggestTime(j), title: c.name, cost: 0, note: [c.desc, c.url].filter(Boolean).join(" · "), wiki: c.key });
+      if (c.kind === "life") { n += addLifeToDay(trip, day, city, [c.life]); const a = act.find(x => x.lifeId === c.life.id); if (a) { a.time = time; a.mins = mins; } return; }
+      act.push({ id: uid(), time, mins, title: c.name, cost: 0, note: [c.desc, c.url].filter(Boolean).join(" · "), wiki: c.key });
       trip.places.push({ id: uid(), name: c.name, city, lat: c.lat, lon: c.lon, day, visited: false, wiki: c.key });
       n += 1;
     });

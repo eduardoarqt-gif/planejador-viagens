@@ -1,6 +1,6 @@
 /* Descobrir atrações: busca atrações perto do destino (OpenTripMap), baralho de cartões
    para deslizar (direita = quero, esquerda = não) e montador de roteiro por proximidade. */
-import { esc } from "./ui.js?v=57";
+import { esc } from "./ui.js?v=58";
 
 const TTL = 7 * 24 * 3600e3;
 const rad = x => x * Math.PI / 180;
@@ -30,7 +30,7 @@ export async function nearbyAttractions(lat, lon) {
   const out = (await Promise.all(top.map(async p => {
     const d = await getJson(`${base}/xid/${p.xid}?apikey=${encodeURIComponent(key)}`).catch(() => null);
     const extract = (d?.wikipedia_extracts?.text || "").replace(/\s+/g, " ").trim();
-    return { title: p.name, desc: [kindLabel(p.kinds), extract ? (extract.length > 150 ? `${extract.slice(0, 147)}…` : extract) : ""].filter(Boolean).join(" · "), img: d?.preview?.source || d?.image || "", lat: p.point.lat, lon: p.point.lon, views: parseInt(p.rate, 10) || 0, lang: "otm", url: d?.wikipedia || d?.url || "" };
+    return { title: p.name, desc: [kindLabel(p.kinds), extract ? (extract.length > 150 ? `${extract.slice(0, 147)}…` : extract) : ""].filter(Boolean).join(" · "), img: d?.preview?.source || d?.image || "", lat: p.point.lat, lon: p.point.lon, views: parseInt(p.rate, 10) || 0, lang: "otm", kinds: p.kinds || "", url: d?.wikipedia || d?.url || "" };
   }))).sort((a, b) => b.views - a.views || !!b.img - !!a.img);
   try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: out })); } catch { /* cheio */ }
   return out;
@@ -117,26 +117,71 @@ export function swipeDeck(cards, title) {
 }
 
 /* ---------- montador de roteiro ---------- */
-/** Distribui lugares pelos dias: percorre por proximidade e corta em fatias (primeiro e último dia mais leves). Devolve [[lugares do dia 1], …]. */
-export function planDays(places, nDays) {
-  const days = Array.from({ length: Math.max(1, nDays) }, () => []);
-  const geo = places.filter(p => p.lat != null && p.lon != null), loose = places.filter(p => !(p.lat != null && p.lon != null));
-  const tour = [];
-  if (geo.length) {
-    const cen = { lat: geo.reduce((s, p) => s + p.lat, 0) / geo.length, lon: geo.reduce((s, p) => s + p.lon, 0) / geo.length };
-    const left = [...geo];
-    let cur = left.splice(left.indexOf(left.reduce((a, b) => (km(cen, b) > km(cen, a) ? b : a))), 1)[0];
-    tour.push(cur);
-    while (left.length) { const nx = left.reduce((a, b) => (km(cur, b) < km(cur, a) ? b : a)); left.splice(left.indexOf(nx), 1); tour.push(nx); cur = nx; }
-  }
-  const n = days.length, w = days.map((_, k) => (n >= 3 && (k === 0 || k === n - 1) ? 0.6 : 1)), sw = w.reduce((a, b) => a + b, 0);
-  const raw = w.map(x => tour.length * x / sw), cnt = raw.map(Math.floor);
-  let rest = tour.length - cnt.reduce((a, b) => a + b, 0);
-  raw.map((r, k) => [r - Math.floor(r), k]).sort((a, b) => b[0] - a[0]).forEach(([, k]) => { if (rest > 0) { cnt[k] += 1; rest -= 1; } });
-  let pos = 0;
-  cnt.forEach((c, k) => { days[k].push(...tour.slice(pos, pos + c)); pos += c; });
-  loose.forEach((p, k) => days.slice().sort((a, b) => a.length - b.length)[0].push(p));
-  return days;
+/** Tempo estimado no local (minutos), por tipo de lugar. */
+export function estimateMins(c) {
+  if (c.mins) return c.mins;
+  if (c.kind === "life") return ({ restaurante: 90, bar: 90, cafe: 45, atracao: 120, hotel: 20, delivery: 20 })[c.life?.categoria] ?? 60;
+  const t = `${c.name || ""} ${c.kinds || ""}`.toLowerCase();
+  if (/theme_park|amusement_park|water_park|disney|universal|legoland|seaworld|studios/.test(t)) return 360;
+  if (/zoo|aquarium|aqu[aá]rio|zool/.test(t)) return 180;
+  if (/museum|museu|gallery|galeria/.test(t)) return 120;
+  if (/stadium|est[aá]dio|arena/.test(t)) return 90;
+  if (/beach|praia|natural|nature|reserve|park|parque|garden|jardim/.test(t)) return 120;
+  if (/tower|viewpoint|mirante|observ/.test(t)) return 60;
+  if (/religion|church|igreja|cathedral|catedral|temple/.test(t)) return 30;
+  if (/monument|memorial|fountain|bridge|historic|architecture|statue|square|plaza|praça/.test(t)) return 40;
+  return 75;
 }
-/** Horário sugerido para o k-ésimo lugar do dia (09:30, 11:30, 13:30…). */
-export const suggestTime = k => { const m = 9 * 60 + 30 + k * 120; return `${String(Math.min(22, Math.floor(m / 60))).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const has = p => p && p.lat != null && p.lon != null;
+/** Deslocamento estimado (minutos): a pé até ~1,2 km; de carro/app acima disso (inclui estacionar/esperar). */
+export function travelMins(a, b) {
+  if (!has(a) || !has(b)) return 15;
+  const d = km(a, b) * 1.35;
+  return Math.round(d < 1.6 ? d / 5 * 60 + 2 : 10 + d / 30 * 60);
+}
+export const fmtClock = m => `${String(Math.min(23, Math.floor(m / 60))).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+export const fmtDur = m => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, "0") : ""}` : `${m} min`);
+const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+
+/**
+ * Distribui os lugares pelos dias respeitando o tempo disponível.
+ * dias: [{ start, end (minutos desde 00:00), busy: [[de, até]…] (atividades já marcadas), loose (minutos de atividades sem horário), anchor {lat,lon}|null }]
+ * Devolve { days: [[{ place, time, mins, travel }…]…], left: [lugares que não couberam] }.
+ */
+export function planDays(places, days) {
+  const pool = places.map(p => ({ ...p, mins: estimateMins(p) }));
+  const cap = days.map(d => Math.max(0, d.end - d.start - d.busy.reduce((s, [a, b]) => s + overlap(a, b, d.start, d.end), 0) - (d.loose || 0)));
+  const total = pool.reduce((s, p) => s + p.mins + 20, 0), totalCap = cap.reduce((a, b) => a + b, 0) || 1;
+  const share = Math.min(1, total / totalCap * 1.15 + 0.05);
+  const picks = days.map(d => ({ items: [], used: 0, cur: d.anchor || null }));
+  const cen = pool.filter(has).length ? { lat: pool.filter(has).reduce((s, p) => s + p.lat, 0) / pool.filter(has).length, lon: pool.filter(has).reduce((s, p) => s + p.lon, 0) / pool.filter(has).length } : null;
+  const run = limits => picks.forEach((pk, k) => {
+    const skip = new Set();
+    while (true) {
+      const cand = pool.filter(p => !skip.has(p));
+      if (!cand.length) break;
+      let p;
+      if (pk.cur) p = cand.reduce((a, b) => (travelMins(pk.cur, b) < travelMins(pk.cur, a) ? b : a));
+      else p = cand.filter(has).length && cen ? cand.filter(has).reduce((a, b) => (km(cen, b) > km(cen, a) ? b : a)) : cand[0];
+      const t = pk.cur ? travelMins(pk.cur, p) : 0;
+      if (pk.used + t + p.mins > limits[k]) { skip.add(p); continue; }
+      pk.items.push({ place: p, travel: t, mins: p.mins }); pk.used += t + p.mins; if (has(p)) pk.cur = p;
+      pool.splice(pool.indexOf(p), 1);
+    }
+  });
+  run(cap.map(c => Math.floor(c * share)));
+  run(cap);
+  /* horários: da abertura do dia, pulando o que já está marcado */
+  const out = days.map((d, k) => {
+    const busy = [...d.busy].sort((a, b) => a[0] - b[0]);
+    let t = d.start;
+    return picks[k].items.map(({ place, travel, mins }) => {
+      t += travel;
+      for (let guard = 0; guard < 20; guard += 1) { const b = busy.find(x => overlap(t, t + mins, x[0], x[1]) > 0); if (!b) break; t = b[1]; }
+      const row = { place, time: fmtClock(t), mins, travel };
+      t += mins;
+      return row;
+    });
+  });
+  return { days: out, left: pool };
+}
