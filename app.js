@@ -1,8 +1,8 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=60";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=60";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=60";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=60";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=60";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=61";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=61";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=61";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=61";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=61";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -151,7 +151,7 @@ async function fitConcludedDays(trip) {
   if (acts || pins || books) {
     const extra = [acts ? `${acts} ${acts === 1 ? "atividade" : "atividades"}` : "", pins ? `${pins} ${pins === 1 ? "atração no mapa" : "atrações no mapa"}` : ""].filter(Boolean).join(" e ");
     const v = await ask("Ajustar dias da viagem", [
-      { name: "_n", type: "note", label: `A rota agora tem ${plural(used, "dia", "dias")} (eram ${oldDays}). Os dias ${used + 1} a ${oldDays} saem da viagem.${books ? ` ${books} ${books === 1 ? "reserva continua" : "reservas continuam"} em Reservas com data depois do fim (apague lá se não valem mais).` : ""}` },
+      { name: "_n", type: "note", label: `A rota agora tem ${plural(used, "dia", "dias")} (eram ${oldDays}). Os dias ${used + 1} a ${oldDays} saem da viagem.${books ? ` ${books} ${books === 1 ? "reserva continua" : "reservas continuam"} em Custos com data depois do fim (apague lá se não valem mais).` : ""}` },
       ...(acts || pins ? [{ name: "wipe", label: `Apagar também ${extra} desses dias`, type: "checkbox", value: true }] : [])
     ], { confirm: "Ajustar" });
     if (!v) return;
@@ -258,7 +258,7 @@ function renderHome() {
         <button class="btn soft" data-act="exp-quick" data-trip="${act.id}">+ Despesa</button>
       </div></section>` : "";
   const dl = upcomingDeadlines();
-  const deadlines = dl.length ? `<section class="alerts"><h3>Prazos próximos</h3>${dl.slice(0, 5).map(x => `<a href="#/t/${x.trip.id}" data-goto-tab="reservas" class="alert-row ${x.left <= 3 ? "urgent" : ""}"><span><b>${esc(x.b.desc)}</b><small>${x.label} ${fmtShort(x.date)} · ${esc(x.trip.name)}</small></span><b>${x.left <= 0 ? "hoje" : `${x.left} d`}</b></a>`).join("")}</section>` : "";
+  const deadlines = dl.length ? `<section class="alerts"><h3>Prazos próximos</h3>${dl.slice(0, 5).map(x => `<a href="#/t/${x.trip.id}" data-goto-tab="custos" class="alert-row ${x.left <= 3 ? "urgent" : ""}"><span><b>${esc(x.b.desc)}</b><small>${x.label} ${fmtShort(x.date)} · ${esc(x.trip.name)}</small></span><b>${x.left <= 0 ? "hoje" : `${x.left} d`}</b></a>`).join("")}</section>` : "";
 
   const by = s => state.trips.filter(t => s.includes(t.status));
   const order = { andamento: 0, planejada: 1, rascunho: 2 };
@@ -374,10 +374,11 @@ function renderTrip(trip) {
   const isActive = activeDayIndex(trip) != null;
   const confirmed = isOfficial(trip);
   const tabs = [...(isActive ? [["hoje", "Hoje"]] : []),
-    ...(confirmed ? [["roteiro", "Roteiro"], ["reservas", "Reservas"], ["custos", "Custos"], ["mapa", "Mapa"], ["despesas", "Despesas"], ["bagagem", "Bagagem"], ["cenarios", "Cenários"]]
-      : [["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["reservas", "Reservas"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]])];
+    ...(confirmed ? [["roteiro", "Roteiro"], ["custos", "Custos"], ["mapa", "Mapa"], ["despesas", "Despesas"], ["bagagem", "Bagagem"], ["cenarios", "Cenários"]]
+      : [["cenarios", "Cenários"], ["custos", "Custos"], ["roteiro", "Roteiro"], ["mapa", "Mapa"], ["despesas", "Despesas"], ["bagagem", "Bagagem"]])];
+  if (ui.tab === "reservas") ui.tab = "custos";
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
-  const content = { hoje: tabHoje, cenarios: tabScenarios, custos: tabCosts, roteiro: tabItinerary, mapa: tabMap, reservas: tabBookings, despesas: tabExpenses, bagagem: tabChecklist }[ui.tab](trip, sc);
+  const content = { hoje: tabHoje, cenarios: tabScenarios, custos: tabCosts, roteiro: tabItinerary, mapa: tabMap, despesas: tabExpenses, bagagem: tabChecklist }[ui.tab](trip, sc);
   const dateLine = trip.start ? `${fmtDay(dayISO(trip, 0))} → ${fmtDay(dayISO(trip, trip.days - 1))}` : "Sem data definida";
   return `<header class="trip-head">
       <div class="trip-head-top">
@@ -547,20 +548,26 @@ function tabCosts(trip, sc) {
         const foreign = c.cur && c.cur !== "BRL";
         const unit = isPerPerson(c, trip) ? trip.travelers.length : 1;
         const linked = c.bookingId ? trip.bookings.find(b => b.id === c.bookingId) : null;
-        const detail = [linked ? "🔗 reserva" : "", seg ? seg.city : "Geral", isPerPerson(c, trip) ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
-        return `<button class="row" data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}" data-del="cost">
+        const detail = [seg ? seg.city : "Geral", isPerPerson(c, trip) ? `por pessoa × ${trip.travelers.length}` : "", c.refundable === false ? "não reembolsável" : ""].filter(Boolean).join(" · ");
+        const tag = `<span class="tag ${c.status}"${linked ? ` data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}" title="Alterar situação, categoria ou destino"` : ""}>${c.status}</span>`;
+        return `<div class="cost-item ${linked?.done ? "done" : ""}" data-del="cost" data-sc="${sc.id}" data-id="${c.id}"><button class="row" ${linked ? `data-act="book-edit" data-id="${linked.id}"` : `data-act="cost-edit" data-sc="${sc.id}" data-id="${c.id}"`}>
           <div><strong>${esc(c.desc)}</strong><small>${esc(detail)}</small></div>
-          <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${trip.travelers.length > 1 && c.amount ? `<small>${brl(costBrl(c, trip) / trip.travelers.length)} por pessoa${isPerPerson(c, trip) ? "" : " (dividido)"}</small>` : ""}${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}<span class="tag ${c.status}">${c.status}</span></div></button>`;
+          <div class="row-right"><b>${c.status === "A orçar" && !c.amount ? "—" : brl(costBrl(c, trip))}</b>${trip.travelers.length > 1 && c.amount ? `<small>${brl(costBrl(c, trip) / trip.travelers.length)} por pessoa${isPerPerson(c, trip) ? "" : " (dividido)"}</small>` : ""}${foreign ? `<small>${(c.amount * unit).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${esc(c.cur)} · cot. ${num(c.rate)}</small>` : ""}${tag}</div></button>${linked ? bookingDetail(linked, trip) : ""}</div>`;
       }).join("")}</section>`;
   }).join("");
   const REMIND = ["Passagens", "Hospedagem", "Transporte", "Passeios", "Alimentação", "Seguro"];
   const todo = REMIND.filter(cat => !sc.costs.some(c => c.cat === cat));
   const quick = todo.length ? `<div class="remind"><small class="muted">Lembrar de orçar (sem valor ainda):</small><div class="chips scroll">${todo.map(cat => `<button class="chip-btn" data-act="cost-quick" data-sc="${sc.id}" data-cat="${cat}">+ ${CAT_ICON[cat]} ${cat}</button>`).join("")}</div></div>` : "";
+  const linkedIds = new Set(sc.costs.map(c => c.bookingId).filter(Boolean));
+  const lone = sc.id === chosenScenario(trip).id ? trip.bookings.filter(b => !linkedIds.has(b.id)).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")) : [];
+  const loneHtml = lone.length ? `<section class="group"><div class="group-head"><span>📌 Reservas sem valor no orçamento</span></div>${lone.map(b => `<div class="cost-item ${b.done ? "done" : ""}" data-del="book" data-id="${b.id}"><button class="row" data-act="book-edit" data-id="${b.id}"><div><strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong><small>${esc(b.type)}</small></div></button>${bookingDetail(b, trip)}</div>`).join("")}</section>` : "";
   return `${picker}
     <div class="section-head"><p class="muted">Custos de <b>${esc(sc.name)}</b>. Aceita cálculos: <code>2.400 ÷ 4</code> ou <code>180 x 7</code>.</p><button class="btn primary" data-act="sc-add-item" data-sc="${sc.id}">+ Item</button></div>
+    ${sc.id === chosenScenario(trip).id ? missingBlock(trip) : ""}
     ${quick}
     ${groups || `<div class="empty"><p>Nenhum custo neste cenário ainda.</p></div>`}
-    ${sc.costs.length ? `<p class="muted tiny">Para excluir um item: deslize para a esquerda ou segure.</p>` : ""}
+    ${loneHtml}
+    ${sc.costs.length || lone.length ? `<p class="muted tiny">Para excluir um item: deslize para a esquerda ou segure. Toque na situação (Estimado, Reservado…) para alterá-la.</p>` : ""}
     ${sc.costs.length ? `<div class="card total-card"><div><small>Total do cenário</small><strong>${brl(st.total)}</strong></div><div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div><div><small>Por dia</small><strong>${brl(st.perDay)}</strong></div></div>` : ""}`;
 }
 
@@ -709,28 +716,21 @@ function missingBookings(trip) {
   return ui.showSkipped ? out : out.filter(m => !m.skipped);
 }
 
-function tabBookings(trip) {
+/** Detalhes da reserva dentro de Custos: datas, localizador, prazo, cancelamento, documentos e "feito". */
+function bookingDetail(b, trip) {
+  const when = [b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ");
+  const bits = [b.confirmed ? "✓ Confirmada" : "", b.checkin ? `Check-in: ${esc(b.checkin.toLowerCase())}` : "", b.seat ? `Assento ${esc(b.seat)}` : "", b.baggage ? `Bagagem: ${esc(b.baggage)}` : "", b.supplier ? `Contato: ${esc(b.supplier)}` : "", b.paidBy && b.paidBy !== "—" ? `Pago por ${esc(b.paidBy)}` : ""].filter(Boolean);
+  return `<div class="book-extra">
+    ${when ? `<small>${when}</small>` : ""}${bits.length ? `<small class="muted">${bits.join(" · ")}</small>` : ""}${b.notes ? `<small class="policy">${esc(b.notes)}</small>` : ""}
+    ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Condições: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
+    <div class="book-actions"><button class="chip-btn" data-act="book-toggle" data-id="${b.id}">${b.done ? "✓ Feito" : "Marcar como feito"}</button>${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
+}
+
+/** "O que falta reservar": a rota do cenário escolhido cruzada com as reservas; aparece no topo de Custos. */
+function missingBlock(trip) {
   const missing = trip.status === "concluida" ? [] : missingBookings(trip);
   const nHidden = (trip.noNeed || []).length;
-  const missingHtml = missing.length || nHidden ? `<section class="alerts"><h3>O que falta reservar</h3>${missing.map((m, i) => `<div class="miss-row ${m.skipped ? "skipped" : ""}"><button class="alert-row" data-act="book-add" data-miss="${i}"><span><b>${esc(m.label)}</b><small>${m.skipped ? "Marcado como \"não preciso\"" : "Toque para cadastrar"}</small></span><b>+</b></button><button class="mini" data-act="miss-skip" data-miss="${i}" aria-label="${m.skipped ? "Voltar a mostrar" : "Não preciso"}" title="${m.skipped ? "Voltar a mostrar" : "Não preciso"}">${m.skipped ? "↺" : "×"}</button></div>`).join("") || `<p class="muted tiny">Nada pendente.</p>`}${nHidden ? `<button class="link tiny" data-act="miss-toggle">${ui.showSkipped ? "Esconder" : "Mostrar"} os ${nHidden} que marquei como "não preciso"</button>` : ""}</section>` : "";
-  const sorted = trip.bookings.slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
-  const open = sorted.filter(b => !b.done), done = sorted.filter(b => b.done);
-  const item = b => `<div class="booking ${b.done ? "done" : ""}" data-del="book" data-id="${b.id}">
-    <button class="check-btn" data-act="book-toggle" data-id="${b.id}" aria-label="Marcar como feito">${b.done ? "✓" : ""}</button>
-    <button class="booking-main" data-act="book-edit" data-id="${b.id}">
-      <strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong>
-      <small>${[b.type, b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ")}</small>
-      ${bookingPrice(b) ? `<small class="price"><b>${bookingPrice(b)}</b></small>` : ""}
-      ${bookingExtras(b, trip)}
-      ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Condições: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
-    </button>
-    <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
-  const pricedTotal = trip.bookings.reduce((sum, b) => sum + bookingBrl(b, trip), 0);
-  return `<div class="section-head"><p class="muted">Reservas, localizadores, condições de cancelamento e prazos.</p><button class="btn primary" data-act="book-add">+ Reserva</button></div>
-    ${pricedTotal ? `<div class="card"><div class="bal"><span>Valor das reservas com preço <small class="muted">(já no orçamento do cenário escolhido)</small></span><b>${brl(pricedTotal)}</b></div></div>` : ""}
-    ${missingHtml}
-    ${open.length ? `<div class="card list">${open.map(item).join("")}</div>` : `<div class="empty"><p>Nada pendente.</p></div>`}
-    ${done.length ? `<h3 class="sub">Concluídas</h3><div class="card list">${done.map(item).join("")}</div>` : ""}`;
+  return missing.length || nHidden ? `<section class="alerts"><h3>O que falta reservar</h3>${missing.map((m, i) => `<div class="miss-row ${m.skipped ? "skipped" : ""}"><button class="alert-row" data-act="book-add" data-miss="${i}"><span><b>${esc(m.label)}</b><small>${m.skipped ? "Marcado como \"não preciso\"" : "Toque para cadastrar"}</small></span><b>+</b></button><button class="mini" data-act="miss-skip" data-miss="${i}" aria-label="${m.skipped ? "Voltar a mostrar" : "Não preciso"}" title="${m.skipped ? "Voltar a mostrar" : "Não preciso"}">${m.skipped ? "↺" : "×"}</button></div>`).join("") || `<p class="muted tiny">Nada pendente.</p>`}${nHidden ? `<button class="link tiny" data-act="miss-toggle">${ui.showSkipped ? "Esconder" : "Mostrar"} os ${nHidden} que marquei como "não preciso"</button>` : ""}</section>` : "";
 }
 
 /* --- Despesas --- */
@@ -857,7 +857,7 @@ async function editCost(sc, cost) {
   const bookingOpts = ["— nenhuma —", ...free.map(bookingLabel)];
   const v = await ask(cost ? "Editar custo" : "Novo custo", [
     { name: "cat", label: "Categoria", type: "select", options: CATEGORIES, value: cost?.cat || "Hospedagem" },
-    ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Descrição e valor são editados na aba Reservas.` }] : [
+    ...(linked ? [{ name: "_l", type: "note", label: `🔗 Ligado à reserva "${linked.desc}". Toque no item (fora da situação) para editar a reserva.` }] : [
       { name: "desc", label: "Descrição", value: cost?.desc, required: true, placeholder: "Ex.: Hotel em Paris" },
       { name: "amount", label: "Valor ou cálculo (pode deixar vazio: fica \"a orçar\")", type: "money", value: cost?.amount ? num(cost.amount) : "", placeholder: "Ex.: 2.400 ou 180 x 7" },
       { name: "cur", label: "Moeda", type: "select", options: curOptions(cost?.cur), value: cost?.cur || "BRL", hint: "A cotação em reais é buscada sozinha." },
@@ -1878,7 +1878,12 @@ const actions = {
 
 /* ---------- excluir deslizando para a esquerda ou segurando (itens com data-del) ---------- */
 const DELETERS = {
-  cost(el) { const sc = findSc(el), c = sc?.costs.find(x => x.id === el.dataset.id); return c && { label: c.desc, run: () => { sc.costs = sc.costs.filter(x => x !== c); } }; },
+  cost(el) {
+    const sc = findSc(el), c = sc?.costs.find(x => x.id === el.dataset.id);
+    if (!c) return null;
+    const t = currentTrip(), b = c.bookingId ? t.bookings.find(x => x.id === c.bookingId) : null;
+    return { label: c.desc, extra: b ? "A reserva ligada também será excluída." : "", run: () => { if (b) { t.bookings = t.bookings.filter(x => x !== b); t.scenarios.forEach(s => { s.costs = s.costs.filter(x => x.bookingId !== b.id); }); } else sc.costs = sc.costs.filter(x => x !== c); } };
+  },
   act(el) {
     const t = currentTrip(), day = Number(el.dataset.day), a = (t.itinerary[day] || []).find(x => x.id === el.dataset.id);
     return a && { label: a.title, run: () => { t.itinerary[day] = t.itinerary[day].filter(x => x !== a); t.places = t.places.filter(p => p.day !== day || !((a.wiki && p.wiki === a.wiki) || (a.lifeId && p.lifeId === a.lifeId))); } };
@@ -1897,7 +1902,7 @@ const DELETERS = {
   async function askDelete(el) {
     const d = DELETERS[el.dataset.del]?.(el);
     if (!d) return;
-    const ok = await ask("Excluir este item?", [{ name: "_n", type: "note", label: `"${d.label}" será excluído.` }], { confirm: "Excluir", danger: true });
+    const ok = await ask("Excluir este item?", [{ name: "_n", type: "note", label: `"${d.label}" será excluído.${d.extra ? ` ${d.extra}` : ""}` }], { confirm: "Excluir", danger: true });
     if (ok) { d.run(); commit(true); toast("Item excluído."); }
   }
   const back = el => { el.classList.remove("swiping"); el.classList.add("swipe-back"); el.style.transform = ""; el.style.boxShadow = ""; setTimeout(() => el.classList.remove("swipe-back"), 250); };

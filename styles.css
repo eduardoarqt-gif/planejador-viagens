@@ -371,3 +371,13 @@ html,body,*{touch-action:manipulation}
 .acts li { display: flex; align-items: stretch; }
 .acts li > button:first-child { flex: 1; min-width: 0; width: auto; }
 .time-end { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+
+/* Custos + reservas juntos */
+.cost-item { border-top: 1px solid var(--line); }
+.group-head + .cost-item { border-top: 0; }
+.cost-item > .row { border-top: 0; }
+.cost-item.done > .row { opacity: .55; }
+.book-extra { display: grid; gap: 4px; padding: 0 16px 12px; margin-top: -6px; }
+.book-extra small { display: block; }
+.book-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.row-right .tag[data-act] { cursor: pointer; }
