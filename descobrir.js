@@ -1,6 +1,6 @@
 /* Descobrir atrações: busca atrações perto do destino (OpenTripMap), baralho de cartões
    para deslizar (direita = quero, esquerda = não) e montador de roteiro por proximidade. */
-import { esc } from "./ui.js?v=59";
+import { esc } from "./ui.js?v=60";
 
 const TTL = 7 * 24 * 3600e3;
 const rad = x => x * Math.PI / 180;
@@ -40,7 +40,7 @@ async function otmAttractions(lat, lon) {
 const G_KEY = "planejador-google-places";
 export const googleKey = () => { try { return localStorage.getItem(G_KEY) || ""; } catch { return ""; } };
 export const setGoogleKey = k => { try { if (k) localStorage.setItem(G_KEY, k.trim()); else localStorage.removeItem(G_KEY); } catch { /* ignora */ } };
-const G_FIELDS = ["id", "displayName", "location", "rating", "userRatingCount", "photos", "regularOpeningHours", "primaryTypeDisplayName", "editorialSummary", "googleMapsUri", "types", "businessStatus"].map(f => `places.${f}`).join(",");
+const G_FIELDS = ["id", "displayName", "location", "rating", "userRatingCount", "photos", "regularOpeningHours", "primaryTypeDisplayName", "editorialSummary", "googleMapsUri", "types", "businessStatus", "formattedAddress"].map(f => `places.${f}`).join(",");
 const G_SKIP = /lodging|travel_agency|real_estate|car_rental|car_dealer|store$|school|hospital|doctor|bank|atm|gas_station|parking/;
 async function gSearch(key, text, lat, lon) {
   const r = await fetch("https://places.googleapis.com/v1/places:searchText", {
@@ -71,7 +71,7 @@ function gHours(h) {
 }
 const gCount = n => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(".", ",")} mil` : String(n));
 export async function googleAttractions(key, lat, lon, city, country) {
-  const ck = `disc3:${(city || "").toLowerCase()}|${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const ck = `disc4:${(city || "").toLowerCase()}|${lat.toFixed(2)},${lon.toFixed(2)}`;
   try { const c = JSON.parse(localStorage.getItem(ck)); if (c && Date.now() - c.t < TTL) return c.d; } catch { /* sem cache */ }
   const where = [city, country].filter(Boolean).join(", ");
   const lists = await Promise.all([`principais pontos turísticos em ${where}`, `o que fazer em ${where}`].map(q => gSearch(key, q, lat, lon)));
@@ -83,6 +83,8 @@ export async function googleAttractions(key, lat, lon, city, country) {
     .map(p => ({
       id: p.id, title: p.displayName.text, lat: p.location.latitude, lon: p.location.longitude, lang: "g", kinds: (p.types || []).join(","),
       desc: [p.primaryTypeDisplayName?.text, (p.editorialSummary?.text || "").slice(0, 140)].filter(Boolean).join(" · "),
+      photos: (p.photos || []).slice(0, 8).map(ph => `https://places.googleapis.com/v1/${ph.name}/media?maxWidthPx=800&key=${encodeURIComponent(key)}`),
+      addr: p.formattedAddress || "", hoursText: p.regularOpeningHours?.weekdayDescriptions || [],
       img: p.photos?.[0]?.name ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?maxWidthPx=640&key=${encodeURIComponent(key)}` : "",
       rating: p.rating, count: p.userRatingCount, hours: gHours(p.regularOpeningHours), url: p.googleMapsUri || ""
     }));
@@ -146,29 +148,59 @@ export function swipeDeck(cards, title) {
     }
     function bindDrag(el) {
       if (!el) return;
-      let x0 = 0, y0 = 0, dx = 0, drag = false;
+      let x0 = 0, y0 = 0, dx = 0, dy = 0, drag = false;
       const yesS = el.querySelector(".dk-stamp.yes"), noS = el.querySelector(".dk-stamp.no");
       el.addEventListener("pointerdown", e => { if (e.target.closest("a")) return; drag = true; x0 = e.clientX; y0 = e.clientY; dx = 0; el.setPointerCapture(e.pointerId); el.style.transition = "none"; });
       el.addEventListener("pointermove", e => {
         if (!drag) return;
-        dx = e.clientX - x0;
+        dx = e.clientX - x0; dy = e.clientY - y0;
         el.style.transform = `translate(${dx}px, ${(e.clientY - y0) * 0.25}px) rotate(${dx / 16}deg)`;
         yesS.style.opacity = String(Math.max(0, Math.min(1, dx / 110)));
         noS.style.opacity = String(Math.max(0, Math.min(1, -dx / 110)));
       });
-      const up = () => {
+      const up = e => {
         if (!drag) return;
         drag = false;
         if (Math.abs(dx) > 100) decide(dx > 0 ? 1 : -1, el);
-        else { el.style.transition = "transform .2s"; el.style.transform = ""; yesS.style.opacity = noS.style.opacity = "0"; }
+        else {
+          el.style.transition = "transform .2s"; el.style.transform = ""; yesS.style.opacity = noS.style.opacity = "0";
+          /* toque (sem arrastar): abre os detalhes do lugar */
+          if (e?.type === "pointerup" && Math.abs(dx) < 8 && Math.abs(dy) < 8) openDetail();
+        }
       };
       el.addEventListener("pointerup", up);
       el.addEventListener("pointercancel", up);
     }
-    const onKey = e => { if (e.key === "ArrowRight") decide(1); else if (e.key === "ArrowLeft") decide(-1); else if (e.key === "Escape") done(); else if (e.key === "Backspace") undo(); };
+    /* detalhes: várias fotos (deslizar), nota, endereço, horários e link */
+    function openDetail() {
+      const c = cards[i];
+      if (!c || root.querySelector(".dk-detail")) return;
+      const pics = c.photos && c.photos.length ? c.photos : c.img ? [c.img] : [];
+      root.insertAdjacentHTML("beforeend", `<div class="dk-detail">
+        <div class="dk-dhead"><button class="dk-x" data-dclose aria-label="Voltar">‹</button><b>${esc(c.name)}</b></div>
+        <div class="dk-dbody">
+          ${pics.length ? `<div class="dk-gal">${pics.map(u => `<img src="${esc(u)}" alt="" draggable="false" loading="lazy">`).join("")}</div>${pics.length > 1 ? `<p class="dk-gcount">${pics.length} fotos · deslize para o lado</p>` : ""}` : ""}
+          <span class="dk-badge dark">${esc(c.badge)}</span>
+          <h3>${esc(c.name)}</h3>
+          ${c.desc ? `<p>${esc(c.desc)}</p>` : ""}
+          ${c.addr ? `<p class="dk-addr">📍 ${esc(c.addr)}</p>` : ""}
+          ${c.hoursText && c.hoursText.length ? `<details><summary>Horário de funcionamento</summary>${c.hoursText.map(h => `<div class="dk-hour">${esc(h)}</div>`).join("")}</details>` : ""}
+          ${c.url ? `<a class="btn soft" href="${esc(c.url)}" target="_blank" rel="noopener">Abrir no Google Maps (avaliações e mais fotos) ↗</a>` : ""}
+        </div>
+        <div class="dk-btns"><button class="dk-b no" data-dno aria-label="Não quero">✕</button><button class="dk-b yes" data-dyes aria-label="Quero">✓</button></div></div>`);
+    }
+    const closeDetail = () => root.querySelector(".dk-detail")?.remove();
+    const onKey = e => {
+      if (e.key === "Escape") { if (root.querySelector(".dk-detail")) closeDetail(); else done(); return; }
+      if (root.querySelector(".dk-detail")) return;
+      if (e.key === "ArrowRight") decide(1); else if (e.key === "ArrowLeft") decide(-1); else if (e.key === "Backspace") undo();
+    };
     document.addEventListener("keydown", onKey);
     root.addEventListener("click", e => {
-      if (e.target.closest("[data-yes]")) decide(1);
+      if (e.target.closest("[data-dclose]")) closeDetail();
+      else if (e.target.closest("[data-dyes]")) { closeDetail(); decide(1); }
+      else if (e.target.closest("[data-dno]")) { closeDetail(); decide(-1); }
+      else if (e.target.closest("[data-yes]")) decide(1);
       else if (e.target.closest("[data-no]")) decide(-1);
       else if (e.target.closest("[data-undo]")) undo();
       else if (e.target.closest("[data-x]")) done();
@@ -221,11 +253,12 @@ function openStart(p, dow, t, mins) {
  * dias: [{ start, end (minutos desde 00:00), busy: [[de, até]…], loose (minutos de atividades sem horário), anchor {lat,lon}|null, dow (0=domingo…6)|null }]
  * Devolve { days: [[{ place, time, mins, travel }…]…], left: [lugares que não couberam, com `why`] }.
  */
-export function planDays(places, days) {
+export function planDays(places, days, pace = "equilibrado") {
   const pool = places.map(p => ({ ...p, mins: estimateMins(p) }));
   const cap = days.map(d => Math.max(0, d.end - d.start - d.busy.reduce((s, [a, b]) => s + overlap(a, b, d.start, d.end), 0) - (d.loose || 0)));
   const total = pool.reduce((s, p) => s + p.mins + 20, 0), totalCap = cap.reduce((a, b) => a + b, 0) || 1;
-  const share = Math.min(1, total / totalCap * 1.15 + 0.05);
+  /* equilibrado: espalha pelos dias; compacto: enche os primeiros dias e deixa os últimos livres */
+  const share = pace === "compacto" ? 1 : Math.min(1, total / totalCap * 1.15 + 0.05);
   const geoPool = pool.filter(has);
   const cen = geoPool.length ? { lat: geoPool.reduce((s, p) => s + p.lat, 0) / geoPool.length, lon: geoPool.reduce((s, p) => s + p.lon, 0) / geoPool.length } : null;
   const st = days.map(d => ({ items: [], used: 0, cur: d.anchor || null, t: d.start }));
