@@ -1,6 +1,6 @@
 /* Descobrir atrações: busca atrações perto do destino (OpenTripMap), baralho de cartões
    para deslizar (direita = quero, esquerda = não) e montador de roteiro por proximidade. */
-import { esc } from "./ui.js?v=61";
+import { esc } from "./ui.js?v=62";
 
 const TTL = 7 * 24 * 3600e3;
 const rad = x => x * Math.PI / 180;

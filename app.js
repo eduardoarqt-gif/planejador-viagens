@@ -1,8 +1,9 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=61";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=61";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=61";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=61";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=61";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=62";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=62";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=62";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=62";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=62";
+import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=62";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -389,6 +390,7 @@ function renderTrip(trip) {
       ${trip.status === "concluida" && trip.autoConcluida ? `<p class="muted">Concluída automaticamente: a volta (${fmtShort(tripEnd(trip))}) já passou. <button class="link" data-act="trip-undo-auto">Foi engano? Voltar a Planejada</button></p>` : ""}
       <h1>${esc(trip.name)}</h1>
       <p class="muted">${[tripCountries(trip).join(", "), dateLine, plural(trip.days, "dia", "dias"), plural(trip.travelers.length, "pessoa", "pessoas")].filter(Boolean).join(" · ")}</p>
+      ${flightAlerts(trip)}
       <div class="kpis">
         <div><small>${liveScenarios(trip).length > 1 ? `Total · ${esc(official.name)} ✓` : "Total"}</small><strong>${brl(st.total)}</strong></div>
         <div><small>Por pessoa</small><strong>${brl(st.perPerson)}</strong></div>
@@ -425,7 +427,7 @@ function dayBody(trip, i) {
   const items = [...(trip.itinerary[i] || []), ...hotelItems(trip, i)].sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   const places = trip.places.filter(p => p.day === i);
   const res = bookingsForDay(trip, i);
-  return `${items.length ? `<ul class="acts">${items.map(a => {
+  return `${flightDay(trip, i)}${items.length ? `<ul class="acts">${items.map(a => {
       const url = a.url || (URL_RE.exec(a.note || "") || [""])[0];
       const note = (a.note || "").replace(/\s*·?\s*https?:\/\/\S+/g, "").replace(/^[\s·]+|[\s·]+$/g, "");
       const end = a.mins && a.time ? clockPlus(a.time, a.mins) : "";
@@ -716,6 +718,91 @@ function missingBookings(trip) {
   return ui.showSkipped ? out : out.filter(m => !m.skipped);
 }
 
+/* --- Acompanhar voos (v62) --- */
+const hhmm = ms => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+/** Trechos de voo de uma reserva que têm número e data (ida e, se houver, volta), com o último status consultado. */
+function flightLegs(b) {
+  if (b.type !== "Voo") return [];
+  return [["ida", b.flightNo, b.date], ["volta", b.flightNoV, b.oneWay ? "" : b.dateEnd]]
+    .filter(([, no, d]) => cleanFlightNo(no) && d)
+    .map(([leg, no, date]) => { const key = legKey(no, date), l = (b.live || {})[leg]; return { leg, no: cleanFlightNo(no), date, key, live: l && l.key === key ? l : null }; });
+}
+function flightCard(b, l) {
+  const x = l.live, v = flightView(x);
+  const gates = s => [s.terminal ? `Terminal ${s.terminal}` : "", s.gate ? `Portão ${s.gate}` : ""].filter(Boolean);
+  let body;
+  if (x?.error) body = `<small class="muted">${esc(FLIGHT_ERRORS[x.error] || "Não consegui consultar agora.")}</small>`;
+  else if (x) {
+    const t = s => `${esc(s.sched)}${s.real ? ` → <b>${esc(s.real)}</b>` : ""}`;
+    const dep = gates(x.dep), arr = [...gates(x.arr), x.arr.belt ? `Esteira ${x.arr.belt}` : ""].filter(Boolean);
+    body = `<div class="fl-row"><span>${esc(x.dep.iata)} ${esc(x.dep.city)}</span><span>Saída ${t(x.dep)}${x.dep.delay > 0 ? ` <em>${fmtDelay(x.dep.delay)}</em>` : ""}</span></div>
+      <div class="fl-row"><span>${esc(x.arr.iata)} ${esc(x.arr.city)}</span><span>Chegada ${t(x.arr)}${x.arr.delay > 0 ? ` <em>${fmtDelay(x.arr.delay)}</em>` : ""}</span></div>
+      <div class="fl-gates">${dep.length ? dep.map(s => `<span class="chip">${esc(s)}</span>`).join("") : `<small class="muted">Portão ainda não divulgado (costuma sair algumas horas antes).</small>`}${x.dep.checkin ? `<span class="chip">Balcão ${esc(x.dep.checkin)}</span>` : ""}</div>
+      ${arr.length ? `<small class="muted">Na chegada: ${arr.map(esc).join(" · ")}</small>` : ""}<small class="muted">Atualizado às ${hhmm(x.fetchedAt)}</small>`;
+  } else body = `<small class="muted">Ainda não consultado.</small>`;
+  return `<div class="flight ${v ? v.tone : ""}"><div class="fl-head"><b>✈️ ${esc(l.no)}</b><small>${l.leg === "ida" ? "Ida" : "Volta"} · ${fmtShort(l.date)}</small>${v ? `<span class="fl-tag ${v.tone}">${esc(v.label)}</span>` : ""}</div>${body}
+    <div class="fl-actions"><button class="chip-btn" data-act="flight-refresh" data-id="${b.id}" data-leg="${l.leg}">🔄 Atualizar</button></div></div>`;
+}
+function flightBlock(b) {
+  const legs = flightLegs(b);
+  if (!legs.length) return "";
+  return `<div class="flights">${flightCfg() ? "" : `<small class="muted">Para ver status, atraso e portão ao vivo, ative o acompanhamento de voos. <button class="link tiny" data-act="flight-setup">Ativar</button></small>`}${legs.map(l => flightCard(b, l)).join("")}</div>`;
+}
+/** Alertas no topo da viagem: voo atrasado, cancelado, embarcando ou com portão definido (de ontem a daqui a 3 dias). */
+function flightAlerts(trip) {
+  const today = todayISO(), out = [];
+  for (const b of trip.bookings) for (const l of flightLegs(b)) {
+    const v = flightView(l.live), d = diffDays(l.date, today);
+    if (!v || d < -1 || d > 3) continue;
+    const gate = l.live.dep.gate;
+    if (v.alert || (gate && d <= 1 && l.live.status !== "Departed" && l.live.status !== "EnRoute" && l.live.status !== "Arrived"))
+      out.push(`<a href="#/t/${trip.id}" data-goto-tab="custos" class="fl-alert ${v.tone}">✈️ <b>${esc(l.no)}</b> ${esc(v.label)}${l.live.dep.real ? ` · sai ${esc(l.live.dep.real)}` : l.live.dep.sched ? ` · sai ${esc(l.live.dep.sched)}` : ""}${l.live.dep.terminal ? ` · T${esc(l.live.dep.terminal)}` : ""}${gate ? ` · Portão ${esc(gate)}` : ""}</a>`);
+  }
+  return out.length ? `<div class="fl-alerts">${out.join("")}</div>` : "";
+}
+/** No roteiro do dia: uma faixa por voo que parte ou volta nessa data. */
+function flightDay(trip, i) {
+  if (!trip.start) return "";
+  const date = dayISO(trip, i), rows = [];
+  for (const b of trip.bookings) for (const l of flightLegs(b)) {
+    if (l.date !== date) continue;
+    const v = flightView(l.live), x = l.live;
+    rows.push(`<button class="fl-day ${v ? v.tone : ""}" data-act="book-edit" data-id="${b.id}">✈️ <b>${esc(l.no)}</b>${x && !x.error ? ` · ${esc(x.dep.iata)} ${esc(x.dep.real || x.dep.sched)} → ${esc(x.arr.iata)} ${esc(x.arr.real || x.arr.sched)}${x.dep.terminal ? ` · T${esc(x.dep.terminal)}` : ""}${x.dep.gate ? ` · Portão ${esc(x.dep.gate)}` : ""}` : ""}${v ? ` <span class="fl-tag ${v.tone}">${esc(v.label)}</span>` : ""}</button>`);
+  }
+  return rows.length ? `<div class="fl-days">${rows.join("")}</div>` : "";
+}
+async function setupFlights() {
+  const cur = flightCfg();
+  const v = await ask("Acompanhar voos", [
+    { name: "_n", type: "note", label: "O Trips consulta o AeroDataBox para mostrar status, atraso, terminal e portão. Crie sua chave grátis seguindo 00_DOCUMENTACAO/COMO_CRIAR_CHAVE_VOOS.md e cole abaixo; ela fica só neste aparelho." },
+    { name: "provider", label: "Onde você criou a chave", type: "select", options: ["RapidAPI", "API.Market"], value: cur ? providerLabel(cur.provider) : "RapidAPI" },
+    { name: "key", label: "Chave da API", value: cur?.key || "", placeholder: "Cole aqui (vazio remove a chave)" }
+  ], { confirm: "Salvar" });
+  if (!v) return false;
+  setFlightCfg(v.provider === "API.Market" ? "market" : "rapidapi", v.key);
+  toast(flightCfg() ? "Chave salva neste aparelho." : "Chave removida.");
+  return !!flightCfg();
+}
+async function refreshFlight(b, leg) {
+  const l = flightLegs(b).find(x => x.leg === leg);
+  if (!l) return;
+  b.live ||= {};
+  try { b.live[leg] = { ...(await fetchFlight(l.no, l.date)), key: l.key }; }
+  catch (e) { b.live[leg] = { key: l.key, error: e.message, fetchedAt: Date.now() }; }
+}
+let flightBusy = false;
+/** Ao abrir a viagem, atualiza sozinho os voos próximos (no máximo 4 por vez; só com chave ativada). */
+async function autoFlights(trip) {
+  if (flightBusy || !flightCfg() || trip.status === "concluida") return;
+  const today = todayISO(), jobs = [];
+  for (const b of trip.bookings) for (const l of flightLegs(b)) if (needsAuto(l.live, l.key, diffDays(l.date, today))) jobs.push([b, l.leg]);
+  if (!jobs.length) return;
+  flightBusy = true;
+  try { for (const [b, leg] of jobs.slice(0, 4)) await refreshFlight(b, leg); }
+  finally { flightBusy = false; }
+  commit(true);
+}
+
 /** Detalhes da reserva dentro de Custos: datas, localizador, prazo, cancelamento, documentos e "feito". */
 function bookingDetail(b, trip) {
   const when = [b.date ? fmtShort(b.date) + (b.dateEnd ? ` a ${fmtShort(b.dateEnd)}` : "") : "", b.locator ? `Localizador ${esc(b.locator)}` : "", b.deadline ? `Prazo ${fmtShort(b.deadline)}` : ""].filter(Boolean).join(" · ");
@@ -723,6 +810,7 @@ function bookingDetail(b, trip) {
   return `<div class="book-extra">
     ${when ? `<small>${when}</small>` : ""}${bits.length ? `<small class="muted">${bits.join(" · ")}</small>` : ""}${b.notes ? `<small class="policy">${esc(b.notes)}</small>` : ""}
     ${cancelTag(b)}${b.cancelPolicy ? `<small class="policy">Condições: ${esc(b.cancelPolicy)}</small>` : ""}${b.changePolicy ? `<small class="policy">Remarcação: ${esc(b.changePolicy)}</small>` : ""}
+    ${flightBlock(b)}
     <div class="book-actions"><button class="chip-btn" data-act="book-toggle" data-id="${b.id}">${b.done ? "✓ Feito" : "Marcar como feito"}</button>${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`;
 }
 
@@ -809,6 +897,7 @@ function render(keepScroll = false) {
   if (trip) {
     if (["hoje", "roteiro"].includes(ui.tab)) fillWeather(trip);
     if (ui.tab === "mapa") initMap(trip);
+    autoFlights(trip);
   } else if (!dest) {
     const act = activeTrip();
     if (act) fillWeather(act);
@@ -939,6 +1028,8 @@ async function editBooking(b, pre = {}) {
     { name: "checkin", label: "Check-in online", type: "select", options: CHECKIN, value: b?.checkin || CHECKIN[0], showIf: ["type", "Voo"] },
     { name: "seat", label: "Assento(s)", value: b?.seat, placeholder: "Ex.: 14A, 14B", showIf: ["type", "Voo"] },
     { name: "baggage", label: "Bagagem", value: b?.baggage, placeholder: "Ex.: 1 despachada de 23 kg + mão", showIf: ["type", "Voo"] },
+    { name: "flightNo", label: "Nº do voo de ida (para acompanhar status e portão)", value: b?.flightNo, placeholder: "Ex.: LA3000", showIf: ["type", "Voo"] },
+    { name: "flightNoV", label: "Nº do voo de volta", value: b?.flightNoV, placeholder: "Ex.: LA3001", showIf: ["type", "Voo"] },
     { name: "supplier", label: "Contato do fornecedor", value: b?.supplier, placeholder: "Telefone, e-mail ou site" },
     { name: "link", label: "Link do documento (OneDrive, e-mail…)", value: b?.link, placeholder: "https://…" },
     { name: "attachments", label: "Anexos (voucher, PDF, print)", type: "attach", value: b?.attachments || [] },
@@ -950,7 +1041,10 @@ async function editBooking(b, pre = {}) {
     ...(!b && pre.costId ? [{ name: "delCost", label: "Excluir este item de Custos (não vou usar)", type: "checkbox", value: false }] : [])
   ]);
   if (!v) return;
-  if (v.type === "Voo") { v.date = v.dateV; v.dateEnd = v.oneWay ? "" : v.dateEndV; }
+  if (v.type === "Voo") {
+    v.date = v.dateV; v.dateEnd = v.oneWay ? "" : v.dateEndV;
+    if ((v.flightNo || "").trim() && !cleanFlightNo(v.flightNo) || (v.flightNoV || "").trim() && !cleanFlightNo(v.flightNoV)) toast("Número de voo não reconhecido (use o formato LA3000); deixei em branco.");
+  }
   if (v.delCost) { sc.costs = sc.costs.filter(c => c.id !== pre.costId); commit(); return; }
   if (v.del) { trip.bookings = trip.bookings.filter(x => x.id !== b.id); trip.scenarios.forEach(s => s.costs.forEach(c => { if (c.bookingId === b.id) delete c.bookingId; })); commit(); return; }
   let amount = null, cur = "BRL", rate = 1;
@@ -966,6 +1060,7 @@ async function editBooking(b, pre = {}) {
     checkinTime: v.type === "Hotel" ? (v.checkinTime || "") : (b?.checkinTime || ""), checkoutTime: v.type === "Hotel" ? (v.checkoutTime || "") : (b?.checkoutTime || ""),
     confirmed: v.confirmed, checkin: v.type === "Voo" && v.checkin !== CHECKIN[0] ? v.checkin : "",
     seat: v.type === "Voo" ? (v.seat || "").trim() : (b?.seat || ""), baggage: v.type === "Voo" ? (v.baggage || "").trim() : (b?.baggage || ""),
+    flightNo: v.type === "Voo" ? cleanFlightNo(v.flightNo) : (b?.flightNo || ""), flightNoV: v.type === "Voo" ? cleanFlightNo(v.flightNoV) : (b?.flightNoV || ""),
     supplier: (v.supplier || "").trim(), notes: (v.notes || "").trim(),
     desc: v.desc.trim(), type: v.type, date: v.date, dateEnd: v.dateEnd, oneWay: v.type === "Voo" && !!v.oneWay, locator: v.locator.trim(), link: v.link.trim(),
     attachments: v.attachments, freeCancelUntil: v.freeCancelUntil, cancelPolicy: v.cancelPolicy.trim(), changePolicy: "", deadline: v.deadline
@@ -1695,6 +1790,17 @@ const actions = {
   "miss-toggle"() { ui.showSkipped = !ui.showSkipped; render(true); },
   async "book-add"(el) { const m = el?.dataset?.miss != null ? missingBookings(currentTrip())[Number(el.dataset.miss)] : null; await editBooking(null, m || {}); },
   async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
+  "flight-setup"() { return setupFlights(); },
+  async "flight-refresh"(el) {
+    if (!flightCfg() && !(await setupFlights())) return;
+    const b = currentTrip().bookings.find(x => x.id === el.dataset.id), leg = el.dataset.leg;
+    if (!b) return;
+    toast("Consultando o voo…");
+    await refreshFlight(b, leg);
+    const r = b.live?.[leg];
+    if (r?.error) toast(FLIGHT_ERRORS[r.error] || "Não consegui consultar agora.");
+    commit(true);
+  },
   "book-toggle"(el) { const b = currentTrip().bookings.find(x => x.id === el.dataset.id); b.done = !b.done; commit(true); },
   async "open-file"(el) {
     toast("Abrindo…");

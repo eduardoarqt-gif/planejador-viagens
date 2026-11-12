@@ -381,3 +381,23 @@ html,body,*{touch-action:manipulation}
 .book-extra small { display: block; }
 .book-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .row-right .tag[data-act] { cursor: pointer; }
+
+/* acompanhar voos (v62) */
+.flights { display: grid; gap: 8px; margin-top: 4px; }
+.flight { border: 1px solid var(--line); border-left-width: 4px; border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; background: var(--surface); }
+.flight.ok { border-left-color: var(--good); } .flight.info { border-left-color: var(--bronze); } .flight.warn { border-left-color: var(--warn); } .flight.bad { border-left-color: var(--bad); }
+.fl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fl-head small { color: var(--muted); }
+.fl-tag { margin-left: auto; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--ink); }
+.fl-tag.ok { background: color-mix(in srgb, var(--good) 22%, transparent); } .fl-tag.warn { background: color-mix(in srgb, var(--warn) 25%, transparent); } .fl-tag.bad { background: color-mix(in srgb, var(--bad) 25%, transparent); } .fl-tag.info { background: color-mix(in srgb, var(--bronze) 25%, transparent); }
+.fl-row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.fl-row em { font-style: normal; font-weight: 700; color: var(--warn); }
+.fl-gates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fl-gates .chip { background: var(--accent-soft); border-radius: 999px; padding: 4px 10px; font-weight: 700; font-size: 13px; }
+.fl-actions { display: flex; gap: 8px; }
+.fl-alerts { display: grid; gap: 6px; margin-top: 10px; }
+.fl-alert { display: block; padding: 9px 12px; border-radius: 12px; background: var(--accent-soft); border-left: 4px solid var(--bronze); font-size: 14px; color: var(--ink); text-decoration: none; }
+.fl-alert.warn { border-left-color: var(--warn); } .fl-alert.bad { border-left-color: var(--bad); } .fl-alert.ok { border-left-color: var(--good); }
+.fl-days { display: grid; gap: 6px; margin-bottom: 10px; }
+.fl-day { text-align: left; padding: 9px 12px; border-radius: 12px; background: var(--inner); border: 1px solid var(--line); border-left: 4px solid var(--bronze); font-size: 14px; width: 100%; }
+.fl-day.ok { border-left-color: var(--good); } .fl-day.warn { border-left-color: var(--warn); } .fl-day.bad { border-left-color: var(--bad); }
