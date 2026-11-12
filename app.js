@@ -1,9 +1,11 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=62";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=62";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=62";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=62";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=62";
-import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=62";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=63";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=63";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=63";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=63";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=63";
+import { LICENCA_CFG } from "./licenca_config.js?v=63";
+import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=63";
+import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=63";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -279,11 +281,12 @@ function renderHome() {
       <div><p class="eyebrow">Dudoo</p><h1>Trips</h1><button class="sync" data-act="sync-setup" data-sync></button></div>
       <button class="btn primary" data-act="${addAct}">${addLabel}</button>
     </header>
-    ${activeCard}${deadlines}
+    ${licBanner()}${activeCard}${deadlines}
     <nav class="seg-tabs">${[["viagens", "Viagens"], ["desejos", "Desejos"], ["historico", "Histórico"], ["destinos", "Destinos"]].map(([id, l]) => `<button class="${ui.home === id ? "active" : ""}" data-home="${id}">${l}</button>`).join("")}</nav>
     <main class="home">${body}</main>
     <footer class="home-foot">
       <button class="link" data-act="sync-setup">Sincronização</button>
+      <button class="link" data-act="lic-info">Licença</button>
       <button class="link" data-act="backup">Exportar backup</button>
       <button class="link" data-act="restore">Importar backup</button>
       <input type="file" id="restoreFile" accept="application/json" hidden>
@@ -884,8 +887,67 @@ async function fillWeather(trip) {
 }
 
 /* ---------- renderização geral ---------- */
+/* ---------- licença (v62) ---------- */
+const lic = { pronta: false, estado: null };
+async function atualizarLicenca() {
+  try { lic.estado = await estadoLicenca(); } catch { lic.estado = null; }
+  lic.pronta = true;
+}
+const licBloqueia = () => LICENCA_CFG.OBRIGATORIA && !(lic.estado && lic.estado.libera);
+function renderAtivacao() {
+  const est = lic.estado, venc = est?.licenca && !est.libera;
+  return `<main class="lic-screen">
+    <p class="eyebrow">Dudoo</p><h1>Trips</h1>
+    <div class="card lic-card">
+      <h2>${venc ? "Licença vencida" : "Ative sua licença"}</h2>
+      <p class="muted">${venc ? esc(est.mensagem) : "Para usar o Dudoo Trips, ative a licença que você recebeu. Ela vale neste aparelho e funciona offline."}</p>
+      <div class="lic-form">
+        <label>Arquivo ou texto da licença
+          <textarea id="licTexto" rows="4" placeholder='Cole aqui o conteúdo do arquivo .dudoo-trips'></textarea></label>
+        <input type="file" id="licArquivo" accept=".dudoo-trips,.json,application/json,text/plain" hidden>
+        <div class="inline-actions"><button class="btn primary" data-act="lic-instalar">Ativar com o texto</button><button class="btn soft" data-act="lic-arquivo">Escolher arquivo…</button></div>
+        <details class="lic-code"><summary>Ativar por código e e-mail</summary>
+          <label>Código<input id="licCodigo" placeholder="DUDOO-2026-XXXX-XXXX-XXXX-XXXX" autocomplete="off"></label>
+          <label>E-mail do administrador<input id="licEmail" type="email" placeholder="voce@email.com" autocomplete="email"></label>
+          <button class="btn soft" data-act="lic-codigo">Ativar por código</button></details>
+      </div>
+      <p class="lic-msg" id="licMsg" role="status"></p>
+    </div>
+    <p class="muted tiny">Seus dados continuam guardados neste aparelho. Mesmo sem licença você pode exportá-los.</p>
+    <div class="inline-actions"><button class="btn ghost sm" data-act="backup">Exportar meus dados</button></div>
+  </main>`;
+}
+const licMsg = (texto, erro = true) => { const el = document.querySelector("#licMsg"); if (el) { el.textContent = texto; el.dataset.erro = erro ? "1" : ""; } };
+async function licApos(fn) {
+  try { await fn(); await atualizarLicenca(); toast("Licença ativada."); render(); }
+  catch (e) { licMsg(e instanceof LicencaInvalida ? e.message : "Não consegui ativar a licença."); }
+}
+/** Faixa de aviso (vencendo / vencida, ainda abre) no topo da tela inicial e das viagens. */
+function licBanner() {
+  const e = lic.estado;
+  if (!LICENCA_CFG.OBRIGATORIA || !e || !["vencendo", "tolerancia"].includes(e.situacao)) return "";
+  return `<button class="lic-banner ${e.situacao === "tolerancia" ? "warn" : ""}" data-act="lic-info">🔑 ${esc(e.mensagem)}</button>`;
+}
+async function licInfo() {
+  const e = lic.estado, l = e?.licenca;
+  const v = await ask("Licença do Dudoo Trips", [
+    { name: "_s", type: "note", label: e ? e.mensagem : "Nenhuma licença instalada." + (LICENCA_CFG.OBRIGATORIA ? "" : " (A exigência de licença ainda não está ligada.)") },
+    ...(l ? [{ name: "_d", type: "note", label: [`Cliente: ${l.cliente}`, `Plano: ${l.plano}`, `Código: ${l.codigo}`, l.gratisAte ? `Período grátis até ${l.gratisAte.split("-").reverse().join("/")}` : ""].filter(Boolean).join(" · ") }] : []),
+    { name: "texto", label: "Instalar/atualizar licença (cole o texto do arquivo .dudoo-trips)", type: "textarea", placeholder: "Deixe vazio para só fechar" },
+    ...(l ? [{ name: "rem", label: "Remover a licença deste aparelho", type: "checkbox", value: false }] : [])
+  ], { confirm: "Salvar" });
+  if (!v) return;
+  if (v.rem) { removerLicenca(); await atualizarLicenca(); toast("Licença removida deste aparelho."); render(); return; }
+  if ((v.texto || "").trim()) {
+    try { await instalarTexto(v.texto); await atualizarLicenca(); toast("Licença instalada."); render(); }
+    catch (err) { toast(err instanceof LicencaInvalida ? err.message : "Não consegui instalar a licença."); }
+  }
+}
+
 function render(keepScroll = false) {
   const app = document.querySelector("#app");
+  if (LICENCA_CFG.OBRIGATORIA && !lic.pronta) { app.innerHTML = `<main class="lic-screen"><p class="muted">Verificando licença…</p></main>`; return; }
+  if (licBloqueia()) { app.innerHTML = renderAtivacao(); updateStatus(getStatus()); return; }
   const r = route();
   const trip = currentTrip();
   const dest = currentDest();
@@ -1790,6 +1852,10 @@ const actions = {
   "miss-toggle"() { ui.showSkipped = !ui.showSkipped; render(true); },
   async "book-add"(el) { const m = el?.dataset?.miss != null ? missingBookings(currentTrip())[Number(el.dataset.miss)] : null; await editBooking(null, m || {}); },
   async "book-edit"(el) { await editBooking(currentTrip().bookings.find(b => b.id === el.dataset.id)); },
+  "lic-info"() { return licInfo(); },
+  "lic-instalar"() { return licApos(() => instalarTexto(document.querySelector("#licTexto").value)); },
+  "lic-arquivo"() { document.querySelector("#licArquivo").click(); },
+  "lic-codigo"() { return licApos(() => ativarPorCodigo(document.querySelector("#licCodigo").value, document.querySelector("#licEmail").value)); },
   "flight-setup"() { return setupFlights(); },
   async "flight-refresh"(el) {
     if (!flightCfg() && !(await setupFlights())) return;
@@ -2096,6 +2162,22 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 window.addEventListener("online", () => sync());
 
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+
+document.addEventListener("change", async event => {
+  if (event.target.id !== "licArquivo" || !event.target.files[0]) return;
+  const texto = await event.target.files[0].text().catch(() => "");
+  licApos(() => instalarTexto(texto));
+});
+/* licença: confere ao abrir e tenta a renovação online (no máximo uma vez por dia) */
+atualizarLicenca().then(async () => {
+  const hoje = todayISO();
+  let ultima = ""; try { ultima = localStorage.getItem("planejador-licenca-check") || ""; } catch { /* ignora */ }
+  if (lic.estado?.licenca && ultima !== hoje) {
+    try { localStorage.setItem("planejador-licenca-check", hoje); } catch { /* ignora */ }
+    if (await renovarOnline()) await atualizarLicenca();
+  }
+  if (LICENCA_CFG.OBRIGATORIA) render();
+});
 
 /* abre direto no dia da viagem em andamento */
 (function boot() {

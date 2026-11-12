@@ -401,3 +401,16 @@ html,body,*{touch-action:manipulation}
 .fl-days { display: grid; gap: 6px; margin-bottom: 10px; }
 .fl-day { text-align: left; padding: 9px 12px; border-radius: 12px; background: var(--inner); border: 1px solid var(--line); border-left: 4px solid var(--bronze); font-size: 14px; width: 100%; }
 .fl-day.ok { border-left-color: var(--good); } .fl-day.warn { border-left-color: var(--warn); } .fl-day.bad { border-left-color: var(--bad); }
+
+/* licença (v63) */
+.lic-screen { max-width: 520px; margin: 0 auto; padding: 32px 16px; display: grid; gap: 14px; }
+.lic-card { padding: 18px; display: grid; gap: 10px; }
+.lic-form { display: grid; gap: 12px; }
+.lic-form label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+.lic-form textarea, .lic-form input { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--inner); color: var(--ink); font: inherit; }
+.lic-code { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 10px; }
+.lic-code summary { cursor: pointer; font-weight: 600; }
+.lic-msg { min-height: 1.2em; font-size: 14px; color: var(--good); }
+.lic-msg[data-erro="1"] { color: var(--bad); }
+.lic-banner { width: 100%; text-align: left; margin-top: 12px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); border-left: 4px solid var(--bronze); font-size: 14px; }
+.lic-banner.warn { border-left-color: var(--warn); }
