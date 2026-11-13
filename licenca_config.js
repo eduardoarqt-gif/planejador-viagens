@@ -7,10 +7,10 @@ export const LICENCA_CFG = {
   VERSAO_FORMATO: 1,
   TOLERANCIA_DIAS: 15,
   AVISO_VENCENDO_DIAS: 10,
-  /* Wix: o mesmo site do Lite e do Arq. Os endpoints do Trips ainda NÃO existem (fase 4); sem eles, a ativação é por arquivo ou texto da licença. */
+  /* Wix: o mesmo site do Lite e do Arq. Endpoints do Trips no ar desde 12/11/2026 (http-functions.js do Wix). */
   URL_BASE: "https://www.eduardoschmidt.arq.br/_functions",
   ENDPOINT_RENOVACAO: "dudoo_trips_licenca",
   ENDPOINT_ATIVACAO: "dudoo_trips_ativar",
-  ENDPOINTS_NO_AR: false,
+  ENDPOINTS_NO_AR: true,
   TIMEOUT_MS: 8000
 };

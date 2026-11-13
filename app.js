@@ -1,11 +1,11 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=63";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=63";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=63";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=63";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=63";
-import { LICENCA_CFG } from "./licenca_config.js?v=63";
-import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=63";
-import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=63";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=64";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=64";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=64";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=64";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=64";
+import { LICENCA_CFG } from "./licenca_config.js?v=64";
+import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=64";
+import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=64";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
