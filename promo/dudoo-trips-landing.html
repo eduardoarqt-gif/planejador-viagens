@@ -1138,12 +1138,48 @@
   </div>
 </section>
 
-<section class="cta-section blueprint">
+<section id="interesse" class="section-pad blueprint">
   <div class="wrap">
-    <h2>Quer levar o Trips na próxima viagem?</h2>
-    <p>Fale com o Eduardo pelo WhatsApp e receba o acesso ao app, que roda no
-    celular e no computador, sem instalar pela loja.</p>
-    <a class="btn btn-primary" href="https://wa.me/5548984212410?text=Quero%20conhecer%20o%20Dudoo%20Trips" target="_blank" rel="noopener">Quero o Dudoo Trips</a>
+    <span class="sheet-tag" style="justify-content:center">Fl.06 — Ficha de interesse</span>
+    <div class="section-head" style="margin:0 auto 40px;text-align:center;max-width:560px;">
+      <h2>Quer levar o Trips na próxima viagem?</h2>
+      <p>Deixe seus dados que o Eduardo entra em contato e libera o acesso ao
+      app, que roda no celular e no computador, sem instalar pela loja.</p>
+    </div>
+
+    <form class="lead-card" id="form-interesse-trips">
+      <div class="lead-grid">
+        <div class="lead-field full">
+          <label for="trips-nome">Nome</label>
+          <input id="trips-nome" name="nome" type="text" required autocomplete="name">
+        </div>
+        <div class="lead-field">
+          <label for="trips-email">E-mail</label>
+          <input id="trips-email" name="email" type="email" required autocomplete="email">
+        </div>
+        <div class="lead-field">
+          <label for="trips-whatsapp">WhatsApp</label>
+          <input id="trips-whatsapp" name="whatsapp" type="tel" required autocomplete="tel">
+        </div>
+        <div class="lead-field full">
+          <label for="trips-segmento">Como você costuma viajar?</label>
+          <select id="trips-segmento" name="segmento">
+            <option value="">Escolha...</option>
+            <option>Sozinho(a)</option>
+            <option>Em casal</option>
+            <option>Em família</option>
+            <option>Com amigos ou em grupo</option>
+          </select>
+        </div>
+        <div class="lead-field full">
+          <label for="trips-mensagem">Conte da sua próxima viagem (opcional)</label>
+          <textarea id="trips-mensagem" name="mensagem"></textarea>
+        </div>
+      </div>
+      <button class="btn btn-primary lead-submit" type="submit">Quero o Dudoo Trips</button>
+      <div class="lead-note">Usamos seus dados só para falar sobre o Dudoo Trips. Prefere falar agora? <a href="https://wa.me/5548984212410?text=Quero%20conhecer%20o%20Dudoo%20Trips" target="_blank" rel="noopener">Chame no WhatsApp</a>.</div>
+      <div class="lead-ok" id="trips-ok">Recebido! O Eduardo entra em contato em breve.</div>
+    </form>
   </div>
 </section>
 
@@ -1160,7 +1196,7 @@
       <div class="footer-mark"><img class="logo-icon" src="data:image/png;base64,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" width="24" height="24" alt="Dudoo Trips"></div>
       <div class="footer-desc">Dudoo Trips — criado por Eduardo Schmidt Arquitetura.</div>
     </div>
-    <div class="footer-code">Fl.06 — Rodapé<br>Planejador de viagens</div>
+    <div class="footer-code">Fl.07 — Rodapé<br>Planejador de viagens</div>
   </div>
 </footer>
 
@@ -1180,5 +1216,28 @@
   // No celular e no computador existe um filme para cada formato: quando um toca, o outro para.
   var filmes = document.querySelectorAll('.film-frame video');
   filmes.forEach(function (f) { f.addEventListener('play', function () { filmes.forEach(function (o) { if (o !== f) o.pause(); }); }); });
+  // Ficha de interesse: igual à do Dudoo Lite. Avisa a página do Wix (mensagem "duda-lead"),
+  // que grava na coleção LeadsMarketing; a Central puxa de lá. Fora do Wix, abre o e-mail pronto.
+  var form = document.getElementById('form-interesse-trips');
+  if (form) {
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var d = new FormData(form);
+      var lead = { type: 'duda-lead', produto: 'Dudoo Trips', origem: 'dudoo-trips-site' };
+      ['nome', 'empresa', 'segmento', 'email', 'whatsapp', 'mensagem'].forEach(function (k) { lead[k] = String(d.get(k) || ''); });
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(lead, '*');
+      } else {
+        var linhas = ['Produto de interesse: Dudoo Trips', 'Nome: ' + lead.nome, 'E-mail: ' + lead.email, 'WhatsApp: ' + lead.whatsapp,
+          'Como viaja: ' + (lead.segmento || '(nao informado)'), 'Mensagem: ' + (lead.mensagem || '(nao informado)')];
+        window.location.href = 'mailto:eduardoarqt@gmail.com?subject=' + encodeURIComponent('Interesse em Dudoo Trips - ' + lead.nome) + '&body=' + encodeURIComponent(linhas.join('\n'));
+      }
+      var ok = document.getElementById('trips-ok');
+      if (ok) { ok.style.display = 'block'; }
+      var botao = form.querySelector('.lead-submit');
+      if (botao) { botao.disabled = true; botao.textContent = 'Enviado'; }
+      form.reset();
+    });
+  }
 })();
 </script>
