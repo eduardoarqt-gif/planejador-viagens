@@ -1,8 +1,8 @@
 /* Licença do Dudoo Trips — porta para JavaScript do núcleo `DUDOO ADM/nucleo_licenca` (formato, estados, ativação, renovação).
    Falha FECHADA: licença ausente, adulterada, de outro produto ou vencida além da tolerância não libera o uso (quando a exigência está ligada).
    A assinatura (Ed25519) impede FORJAR licença; num site estático nada impede quem sabe mexer no código de remover a checagem (ver SPRINT_LICENCA). */
-import { CHAVE_PUBLICA_PEM } from "./chave_publica_licenca.js?v=65";
-import { LICENCA_CFG as CFG } from "./licenca_config.js?v=65";
+import { CHAVE_PUBLICA_PEM } from "./chave_publica_licenca.js?v=66";
+import { LICENCA_CFG as CFG } from "./licenca_config.js?v=66";
 
 const KEY = "planejador-licenca";
 const CAMPOS = ["codigo", "cliente", "email_master", "limite_usuarios", "plano", "emitida_em", "valida_ate", "versao_formato"];
@@ -28,7 +28,7 @@ const pemParaDer = pem => b64(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g
 let naclCache = null;
 async function carregarNacl() {
   if (naclCache) return naclCache;
-  const m = await import("./nacl-fast.min.js?v=65");
+  const m = await import("./nacl-fast.min.js?v=66");
   naclCache = globalThis.nacl || m.default || m;
   return naclCache;
 }

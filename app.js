@@ -1,11 +1,11 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=65";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=65";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=65";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=65";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur, travelMins, km } from "./descobrir.js?v=65";
-import { LICENCA_CFG } from "./licenca_config.js?v=65";
-import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=65";
-import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=65";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=66";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=66";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=66";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=66";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur, travelMins, km } from "./descobrir.js?v=66";
+import { LICENCA_CFG } from "./licenca_config.js?v=66";
+import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=66";
+import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=66";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -482,6 +482,7 @@ function tabHoje(trip) {
     </article>
     ${i === today ? nextStop(trip, i) : ""}
     <article class="card">${dayBody(trip, i)}</article>
+    ${i === today && !days[i].transit && days[i].city !== "A definir" ? `<article class="card free-time"><span class="eyebrow">Sobrou tempo?</span><p class="muted">Sem programação para agora? Veja atrações perto de você e encaixe no resto do dia.</p><button class="btn primary" data-act="discover" data-today="1" data-city="${esc(days[i].city)}" data-day="${i}">🃏 Descobrir atrações para hoje</button></article>` : ""}
     <div class="quick-grid">
       <button class="quick" data-act="exp-quick" data-trip="${trip.id}"><b>${brl(spent)}</b><small>gasto no dia · lançar despesa</small></button>
       <button class="quick" data-tab="bagagem"><b>${done}/${trip.checklist.length}</b><small>itens da bagagem</small></button>
@@ -1392,12 +1393,25 @@ function lifeSummary(city) {
   return [conhecer ? `${conhecer} p/ conhecer` : "", repetir ? `${repetir} p/ repetir` : "", !conhecer && !repetir ? plural(list.length, "lugar", "lugares") : ""].filter(Boolean).join(" · ");
 }
 /* Descobrir atrações: cartões de deslizar (seus lugares do Life + atrações populares do OpenTripMap) → roteiro por proximidade */
+/* posição atual (opcional): 4 s, sem insistir; sem permissão o Descobrir usa o centro da cidade */
+function posicaoAtual() {
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 4000, maximumAge: 300000 });
+  });
+}
 async function discoverCity(el) {
   const trip = currentTrip(), city = el.dataset.city;
-  const dayIdx = dayList(trip).map((d, i) => ({ i, city: d.city })).filter(d => d.city === city).map(d => d.i);
+  /* Modo "hoje" (v66): só o dia de hoje, do horário atual até o fim da noite, a partir de onde a pessoa está */
+  const hoje = el.dataset.today === "1" ? Number(el.dataset.day) : null;
+  const dayIdx = hoje != null ? [hoje] : dayList(trip).map((d, i) => ({ i, city: d.city })).filter(d => d.city === city).map(d => d.i);
   if (!dayIdx.length) return;
+  const agora = new Date(), nowMin = agora.getHours() * 60 + agora.getMinutes();
+  if (hoje != null && nowMin >= 1230) { toast("Já está tarde para novas atrações hoje."); return; }
   toast("Buscando atrações…");
   const geo = await geoOfCity(trip, city).catch(() => null);
+  const aqui = hoje != null ? await posicaoAtual() : null;
+  const perto = aqui && geo && km(aqui, geo) < 60 ? aqui : null;
   const life = await getLifePlaces().then(d => lifeForCity(d.itens, city).filter(p => ["quero_conhecer", "quero_repetir", "favorito"].includes(p.status))).catch(() => []);
   let wiki = [];
   if (geo) {
@@ -1409,7 +1423,7 @@ async function discoverCity(el) {
       ], { confirm: "Continuar" });
       if (k?.key?.trim()) setGoogleKey(k.key); else if (k?.otm?.trim()) setOtmKey(k.otm);
     }
-    try { wiki = (await nearbyAttractions(geo.lat, geo.lon, city, countryOfCity(trip, city))) || []; }
+    try { wiki = (await nearbyAttractions((perto || geo).lat, (perto || geo).lon, city, countryOfCity(trip, city))) || []; }
     catch (err) {
       console.warn("atrações:", err.message, err.detail || "");
       if (err.message === "chave") { if (googleKey()) setGoogleKey(""); else setOtmKey(""); toast(`A chave não foi aceita${err.detail ? `: ${err.detail.slice(0, 120)}` : "."} Tente de novo com outra chave.`); }
@@ -1446,11 +1460,12 @@ async function discoverCity(el) {
       n += 1;
       if (t0 == null) loose += dur; else busy.push([t0, t0 + dur]);
     }
-    const anchor = pins.length ? { lat: pins.reduce((s, p) => s + p.lat, 0) / pins.length, lon: pins.reduce((s, p) => s + p.lon, 0) / pins.length } : null;
+    if (hoje != null) { start = Math.max(480, Math.ceil((nowMin + 10) / 15) * 15); end = 1260; }
+    const anchor = perto ? perto : pins.length ? { lat: pins.reduce((s, p) => s + p.lat, 0) / pins.length, lon: pins.reduce((s, p) => s + p.lon, 0) / pins.length } : null;
     return { start, end, busy, loose, anchor, had: n, dow: date ? new Date(`${date}T12:00:00`).getDay() : null };
   });
   const DUR = [15, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360, 480];
-  const dayLabel = k => `Dia ${dayIdx[k] + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, dayIdx[k]))}` : ""}${info[k].had ? ` (${plural(info[k].had, "atividade", "atividades")})` : ""}`;
+  const dayLabel = k => `${hoje != null ? "Hoje · " : ""}Dia ${dayIdx[k] + 1}${trip.start ? ` · ${fmtDay(dayISO(trip, dayIdx[k]))}` : ""}${info[k].had ? ` (${plural(info[k].had, "atividade", "atividades")})` : ""}`;
   const OUT = "Não incluir";
   const PACE = ["Equilibrado (espalha pelos dias)", "Compacto (enche os primeiros dias e deixa dias livres)"];
   let pace = 0, rows, v;
@@ -1460,17 +1475,18 @@ async function discoverCity(el) {
     plan.days.forEach((list, k) => list.forEach(x => rows.push({ c: x.place, day: k, time: x.time, mins: x.mins })));
     plan.left.forEach(c => rows.push({ c, day: -1, time: "10:00", mins: c.mins, why: c.why }));
     const durOpts = m => [...new Set([...DUR, m])].sort((a, b) => a - b).map(fmtDur);
-    v = await ask(`Roteiro de ${city}`, [
+    v = await ask(hoje != null ? `Hoje em ${city}` : `Roteiro de ${city}`, [
       { name: "_n", type: "note", label: `${plural(rows.filter(x => x.day >= 0).length, "atração cabe", "atrações cabem")} no tempo disponível, agrupadas por proximidade. Ajuste o dia, a chegada e o tempo de cada uma antes de confirmar. A saída é a chegada mais o tempo.` },
-      { name: "pace", label: "Ritmo", type: "select", options: PACE, value: PACE[pace], hint: "Equilibrado distribui as atrações por todos os dias; Compacto concentra e deixa dias livres no fim." },
-      { name: "recalc", label: "Só recalcular com o ritmo escolhido (não adiciona agora)", type: "checkbox", value: false },
+      ...(hoje != null ? [] : [
+        { name: "pace", label: "Ritmo", type: "select", options: PACE, value: PACE[pace], hint: "Equilibrado distribui as atrações por todos os dias; Compacto concentra e deixa dias livres no fim." },
+        { name: "recalc", label: "Só recalcular com o ritmo escolhido (não adiciona agora)", type: "checkbox", value: false }]),
       ...rows.flatMap((x, n) => [
         { name: `_t${n}`, type: "note", label: `${n + 1}. ${x.c.name}${x.why ? ` — fica de fora: ${x.why}` : ""}` },
         { name: `d${n}`, label: "Dia", type: "select", options: [OUT, ...info.map((_, k) => dayLabel(k))], value: x.day >= 0 ? dayLabel(x.day) : OUT },
         { name: `t${n}`, label: "Chegada", type: "time", value: x.time },
         { name: `m${n}`, label: "Tempo no local", type: "select", options: durOpts(x.mins), value: fmtDur(x.mins) }
       ]),
-      { name: "_a", type: "note", label: "Cálculo: tempo no local estimado pelo tipo de lugar; horário de funcionamento respeitado quando o Google informa; deslocamento estimado (a pé até ~1,2 km, depois de carro/app); dia das 09:30 às 20:00, com chegada e partida mais leves e as atividades que você já marcou descontadas." }
+      { name: "_a", type: "note", label: `Cálculo: tempo no local estimado pelo tipo de lugar; horário de funcionamento respeitado quando o Google informa; deslocamento estimado (a pé até ~1,2 km, depois de carro/app); ${hoje != null ? "de agora até as 21:00, a partir de onde você está (se o aparelho permitir a localização), com as atividades que você já marcou descontadas." : "dia das 09:30 às 20:00, com chegada e partida mais leves e as atividades que você já marcou descontadas."}` }
     ], { confirm: "Adicionar ao roteiro" });
     if (!v) { commit(true); return; }
     if (v.recalc) { pace = Math.max(0, PACE.indexOf(v.pace)); continue; }
