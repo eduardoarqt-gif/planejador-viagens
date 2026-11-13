@@ -414,3 +414,10 @@ html,body,*{touch-action:manipulation}
 .lic-msg[data-erro="1"] { color: var(--bad); }
 .lic-banner { width: 100%; text-align: left; margin-top: 12px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); border-left: 4px solid var(--bronze); font-size: 14px; }
 .lic-banner.warn { border-left-color: var(--warn); }
+
+/* Próxima parada (v65) */
+.next-stop { border-left: 4px solid var(--bronze); display: grid; gap: 4px; justify-items: start; }
+.next-stop h3 { margin: 0; font-size: 20px; }
+.next-stop p { margin: 0; font-size: 14px; }
+.next-stop .ns-when { color: var(--muted); }
+.next-stop .ns-travel { background: var(--accent-soft); padding: 7px 11px; border-radius: 10px; margin: 4px 0 6px; }

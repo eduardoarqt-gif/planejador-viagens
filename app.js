@@ -1,11 +1,11 @@
-import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=64";
-import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=64";
-import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=64";
-import { ask, toast, brl, esc, plural, num } from "./ui.js?v=64";
-import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur } from "./descobrir.js?v=64";
-import { LICENCA_CFG } from "./licenca_config.js?v=64";
-import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=64";
-import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=64";
+import { parseMoneyExpression, calculateBalances, settle, expenseTotal } from "./core.js?v=65";
+import { state, hooks, save, removeItem, setTemplate, replaceAll, normalizeTrip, syncLinkedCosts, BOOKING_CAT, getLifePlaces, getCachedLifePlaces, uid, sync, syncToken, setSyncToken, getStatus, getFileBlob, DEFAULT_CHECKLIST } from "./data.js?v=65";
+import { geocodeCity, geocodeOptions, cityWeather, weatherIcon, fxRate, searchPlaces, loadLeaflet, todayISO, addDays, diffDays } from "./services.js?v=65";
+import { ask, toast, brl, esc, plural, num } from "./ui.js?v=65";
+import { nearbyAttractions, googleKey, setGoogleKey, otmKey, setOtmKey, swipeDeck, planDays, fmtDur, travelMins, km } from "./descobrir.js?v=65";
+import { LICENCA_CFG } from "./licenca_config.js?v=65";
+import { estadoLicenca, instalarTexto, ativarPorCodigo, renovarOnline, removerLicenca, LicencaInvalida } from "./licenca.js?v=65";
+import { flightCfg, setFlightCfg, providerLabel, cleanFlightNo, fetchFlight, flightView, needsAuto, legKey, fmtDelay, FLIGHT_ERRORS } from "./voos.js?v=65";
 
 const CATEGORIES = ["Passagens", "Hospedagem", "Transporte", "Alimentação", "Passeios", "Compras", "Seguro", "Chip/Internet", "Câmbio e taxas", "Outros"];
 const CAT_ICON = { Passagens: "✈️", Hospedagem: "🛏️", Transporte: "🚗", Alimentação: "🍽️", Passeios: "🎟️", Compras: "🛍️", Seguro: "🛡️", "Chip/Internet": "📶", "Câmbio e taxas": "💱", Outros: "•" };
@@ -445,6 +445,29 @@ function dayBody(trip, i) {
         <button class="res-main" data-act="book-edit" data-id="${b.id}"><strong>${BOOKING_ICON[b.type] || "📌"} ${esc(b.desc)}</strong><small>${[b.type, b.locator ? `Localizador ${esc(b.locator)}` : ""].filter(Boolean).join(" · ")}</small>${cancelTag(b)}</button>
         <div class="res-actions">${b.link ? `<a class="mini" href="${esc(b.link)}" target="_blank" rel="noopener" title="Abrir documento">🔗</a>` : ""}${bookingAttachButtons(b)}</div></div>`).join("")}</details>` : ""}`;
 }
+/* Próxima parada (v65): a próxima atividade com horário, quanto falta e o deslocamento estimado desde a parada anterior. */
+function nextStop(trip, i) {
+  const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const items = [...(trip.itinerary[i] || []), ...hotelItems(trip, i)].filter(a => toMin(a.time) != null).sort((a, b) => toMin(a.time) - toMin(b.time));
+  const k = items.findIndex(a => toMin(a.time) > nowMin);
+  if (k < 0) return "";
+  const pin = a => a && !a.hotel ? trip.places.find(p => p.day === i && p.lat != null && ((a.wiki && p.wiki === a.wiki) || (a.lifeId && p.lifeId === a.lifeId) || normName(p.name) === normName(a.title))) : null;
+  const nx = items[k], prev = items[k - 1], cur = prev && nowMin < toMin(prev.time) + (prev.mins || 0) ? prev : null;
+  const a = pin(prev), b = pin(nx), wait = toMin(nx.time) - nowMin;
+  let travel = "";
+  if (a && b) {
+    const d = km(a, b) * 1.35, walk = d < 1.6;
+    travel = `<p class="ns-travel">${walk ? "🚶" : "🚕"} <b>${fmtDur(travelMins(a, b))}</b> ${walk ? "a pé" : "de carro/app"} (${num(d < 1 ? Math.round(d * 100) / 100 : Math.round(d * 10) / 10)} km) desde ${esc(prev.title)}</p>`;
+  }
+  const route = b ? `<a class="btn soft sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=${b.lat},${b.lon}">Abrir rota</a>` : "";
+  return `<article class="card next-stop">
+      <span class="eyebrow">Próxima parada</span>
+      <h3>${nx.hotel ? "🛏️ " : ""}${esc(nx.title)}</h3>
+      <p class="ns-when">às <b>${esc(nx.time)}</b> · ${wait >= 60 ? `em ${fmtDur(wait)}` : `em ${wait} min`}${cur ? ` · agora: ${esc(cur.title)} até ${clockPlus(cur.time, cur.mins)}` : ""}</p>
+      ${travel}${route}
+    </article>`;
+}
 function tabHoje(trip) {
   const days = dayList(trip);
   const today = activeDayIndex(trip);
@@ -457,6 +480,7 @@ function tabHoje(trip) {
         <button class="icon-btn" data-act="hoje-nav" data-d="1" ${i === days.length - 1 ? "disabled" : ""} aria-label="Próximo dia">›</button></div>
       <div class="wx big" data-wx="${i}"></div>
     </article>
+    ${i === today ? nextStop(trip, i) : ""}
     <article class="card">${dayBody(trip, i)}</article>
     <div class="quick-grid">
       <button class="quick" data-act="exp-quick" data-trip="${trip.id}"><b>${brl(spent)}</b><small>gasto no dia · lançar despesa</small></button>
@@ -2114,7 +2138,10 @@ document.addEventListener("click", event => {
   const open = event.target.closest("[data-open-hoje]");
   if (open) { const t = state.trips.find(x => x.id === open.dataset.openHoje); ui.tripId = t.id; ui.tab = "hoje"; ui.hojeDay = null; return; }
   const goto = event.target.closest("[data-goto-tab]");
-  if (goto) { ui.tripId = goto.getAttribute("href").split("/").pop(); ui.tab = goto.dataset.gotoTab; return; }
+  if (goto) { ui.tripId = goto.getAttribute("href").split("/").pop(); ui.tab = goto.dataset.gotoTab;
+    /* já dentro da mesma viagem o endereço não muda (não há hashchange): troca a aba aqui mesmo */
+    if (location.hash === goto.getAttribute("href")) { event.preventDefault(); render(); }
+    return; }
   const home = event.target.closest("[data-home]");
   if (home) { ui.home = home.dataset.home; render(); return; }
   const tab = event.target.closest("[data-tab]");

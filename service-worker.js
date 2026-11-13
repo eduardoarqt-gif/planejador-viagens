@@ -1,5 +1,5 @@
-const CACHE = "planejador-viagens-v64";
-const ASSETS = ["./", "./index.html", "./styles.css?v=64", "./app.js?v=64", "./core.js?v=64", "./data.js?v=64", "./ui.js?v=64", "./services.js?v=64", "./mascaras.js?v=64", "./descobrir.js?v=64", "./voos.js?v=64", "./licenca.js?v=64", "./licenca_config.js?v=64", "./chave_publica_licenca.js?v=64", "./nacl-fast.min.js?v=64", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
+const CACHE = "planejador-viagens-v65";
+const ASSETS = ["./", "./index.html", "./styles.css?v=65", "./app.js?v=65", "./core.js?v=65", "./data.js?v=65", "./ui.js?v=65", "./services.js?v=65", "./mascaras.js?v=65", "./descobrir.js?v=65", "./voos.js?v=65", "./licenca.js?v=65", "./licenca_config.js?v=65", "./chave_publica_licenca.js?v=65", "./nacl-fast.min.js?v=65", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", event => {
   self.skipWaiting();
